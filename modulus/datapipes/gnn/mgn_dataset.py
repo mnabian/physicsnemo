@@ -106,8 +106,8 @@ class MGNDataset(DGLDataset):
             self.node_type.append(self._one_hot_encode(node_type))
             noise_mask.append(torch.eq(node_type, torch.zeros_like(node_type)))
 
+            self.mesh_pos.append(torch.tensor(data_np["mesh_pos"][0]))
             if self.split != "train":
-                self.mesh_pos.append(torch.tensor(data_np["mesh_pos"][0]))
                 self.cells.append(data_np["cells"][0])
                 self.rollout_mask.append(self._get_rollout_mask(node_type))
 
@@ -187,10 +187,10 @@ class MGNDataset(DGLDataset):
         )
         graph.ndata["x"] = node_features
         graph.ndata["y"] = node_targets
+        graph.ndata["mesh_pos"] = self.mesh_pos[gidx]
         if self.split == "train":
             return graph
         else:
-            graph.ndata["mesh_pos"] = self.mesh_pos[gidx]
             cells = self.cells[gidx]
             rollout_mask = self.rollout_mask[gidx]
             return graph, cells, rollout_mask

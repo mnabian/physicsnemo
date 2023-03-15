@@ -127,7 +127,13 @@ class MeshGraphNet(Module):
             hidden_dim_node_encoder,
             num_layers_node_encoder,
         )
-        self.node_decoder = _Decoder(
+        self.node_decoder_u = _Decoder(
+            output_dim, hidden_dim_node_decoder, num_layers_node_decoder
+        )
+        self.node_decoder_v = _Decoder(
+            output_dim, hidden_dim_node_decoder, num_layers_node_decoder
+        )
+        self.node_decoder_p = _Decoder(
             output_dim, hidden_dim_node_decoder, num_layers_node_decoder
         )
         self.processor = _GraphProcessor(
@@ -142,14 +148,20 @@ class MeshGraphNet(Module):
     def forward(
         self,
         graph: Union[DGLGraph, List[DGLGraph]],
+        node_x: Tensor,
+        node_y: Tensor,
         node_features: Tensor,
         edge_features: Tensor,
     ) -> Tensor:
         edge_features = self.edge_encoder(edge_features)
-        node_features = self.node_encoder(node_features)
+        node_features = self.node_encoder(
+            torch.cat((node_x, node_y, node_features), dim=-1)
+        )
         x = self.processor(graph, node_features, edge_features)
-        x = self.node_decoder(x)
-        return x
+        u = self.node_decoder_u(x)
+        v = self.node_decoder_v(x)
+        p = self.node_decoder_p(x)
+        return u, v, p
 
 
 class _Encoder(nn.Module):

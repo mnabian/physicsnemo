@@ -111,6 +111,15 @@ def main(cfg: DictConfig) -> None:
     else:
         logger0.info("Patch-based training disabled")
 
+    # Parse the t-distribution parameters
+    if hasattr(cfg.generation, "use_t_latents"):
+        use_t_latents = cfg.generation.use_t_latents
+    else:
+        use_t_latents = False
+    if hasattr(cfg.generation, "nu"):
+        nu = cfg.generation.nu
+    else:
+        nu = 0
     # Parse the inference mode
     if cfg.generation.inference_mode == "regression":
         load_net_reg, load_net_res = True, False
@@ -164,7 +173,7 @@ def main(cfg: DictConfig) -> None:
             solver=cfg.sampler.solver,
         )
     elif cfg.sampler.type == "stochastic":
-        if cfg.generation.use_t_latents:
+        if use_t_latents:
             raise NotImplementedError(
                 "Using latents from a t-disttribution is not yet supported for stochastic samplers"
             )
@@ -174,8 +183,6 @@ def main(cfg: DictConfig) -> None:
             patch_shape=patch_shape[1],
             boundary_pix=cfg.sampler.boundary_pix,
             overlap_pix=cfg.sampler.overlap_pix,
-            use_t_latents=cfg.generation.use_t_latents,
-            nu=cfg.generation.nu,
         )
     else:
         raise ValueError(f"Unknown sampling method {cfg.sampling.type}")
@@ -230,6 +237,8 @@ def main(cfg: DictConfig) -> None:
                         device=device,
                         hr_mean=mean_hr,
                         lead_time_label=lead_time_label,
+                        use_t_latents=use_t_latents,
+                        nu=nu,
                     )
             if cfg.generation.inference_mode == "regression":
                 image_out = image_reg

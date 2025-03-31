@@ -231,9 +231,32 @@ Docker container on a remote server from your local desktop, follow these steps:
 **Note:** Ensure the remote server’s firewall allows connections on port `6006`
 and that your local machine’s firewall allows outgoing connections.
 
+# Extensions
+
+## Heavy-Tailed Diffusion Models
+To accurately model rare events in the data, it might be more useful to use diffusion
+models designed for heavy tailed modeling. [t-EDM](https://openreview.net/forum?id=tozlOEN4qp)
+is one such alternative, which relies on using Student-t distributions as noising
+and denoising processes for modeling heavy-tailed data while requiring minimal
+implementation overhead. More specifically, for training, we provide an
+implementation of the network preconditioner and loss function
+in `modulus.metrics.diffusion.preconditioning.tEDMPrecond'
+and `modulus.metrics.diffusion.loss.tEDMLoss`. 
+
+For sampling, the EDM sampler can be used out-of-the-box with the only difference
+being sampling initial latents from a Student-t distribution. We provide an easy
+recipe for generating random latents from a Student-t ditribution in
+`modulus.utils.generative.utils.StackedRandomGenerator.randt`. A full sampler
+implementation has been integrated in the CorrDiff deterministic sampler and
+can be enabled by setting the flag `config.generation.use_t_latents=True` and
+specifying the number of degrees of freedom `config.generation.nu` to be an
+integer greater than 2.
+
+
 
 ## References
 
 - [Residual Diffusion Modeling for Km-scale Atmospheric Downscaling](https://arxiv.org/pdf/2309.15214.pdf)
 - [Elucidating the design space of diffusion-based generative models](https://openreview.net/pdf?id=k7FuTOWMOc7)
 - [Score-Based Generative Modeling through Stochastic Differential Equations](https://arxiv.org/pdf/2011.13456.pdf)
+- [Heavy-Tailed Diffusion Models](https://openreview.net/forum?id=tozlOEN4qp)

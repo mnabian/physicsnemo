@@ -43,6 +43,10 @@ times:
   # hurricane
   - 2021-09-12T00:00:00
   - 2021-09-12T12:00:00
+use_t_latents: false
+  # Whether to use t-distribution for sampling
+nu: 0
+  # Number of degrees of freedom for the t-distribution
 
 perf:
   force_fp16: false

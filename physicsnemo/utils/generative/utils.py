@@ -65,6 +65,8 @@ class StackedRandomGenerator:  # pragma: no cover
 
     def __init__(self, device, seeds):
         super().__init__()
+        self.device = device
+        self.seeds = seeds
         self.generators = [
             torch.Generator(device).manual_seed(int(seed) % (1 << 32)) for seed in seeds
         ]
@@ -77,6 +79,26 @@ class StackedRandomGenerator:  # pragma: no cover
         return torch.stack(
             [torch.randn(size[1:], generator=gen, **kwargs) for gen in self.generators]
         )
+
+    def randt(self, nu, size, **kwargs):
+        """
+        Generates samples from a standard Student-t distribution with nu degrees of freedom.
+        This is useful when sampling from heavy tailed diffusion models.
+        """
+        if size[0] != len(self.generators):
+            raise ValueError(
+                f"Expected first dimension of size {len(self.generators)}, got {size[0]}"
+            )
+        chi_dist = torch.distributions.Chi2(nu)
+        kappa = (
+            (chi_dist.sample((len(self.seeds),)) / nu)
+            .view(-1, *([1] * len(size[1:])))
+            .to(self.device)
+        )
+        eps = torch.stack(
+            [torch.randn(size[1:], generator=gen, **kwargs) for gen in self.generators]
+        )
+        return eps / torch.sqrt(kappa)
 
     def randn_like(self, input):
         return self.randn(

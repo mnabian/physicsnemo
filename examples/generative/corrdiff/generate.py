@@ -164,12 +164,18 @@ def main(cfg: DictConfig) -> None:
             solver=cfg.sampler.solver,
         )
     elif cfg.sampler.type == "stochastic":
+        if cfg.generation.use_t_latents:
+            raise NotImplementedError(
+                "Using latents from a t-disttribution is not yet supported for stochastic samplers"
+            )
         sampler_fn = partial(
             stochastic_sampler,
             img_shape=img_shape[1],
             patch_shape=patch_shape[1],
             boundary_pix=cfg.sampler.boundary_pix,
             overlap_pix=cfg.sampler.overlap_pix,
+            use_t_latents=cfg.generation.use_t_latents,
+            nu=cfg.generation.nu,
         )
     else:
         raise ValueError(f"Unknown sampling method {cfg.sampling.type}")

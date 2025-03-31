@@ -24,4 +24,5 @@ from .loss import (
     VELoss,
     VELoss_dfsr,
     VPLoss,
+    tEDMLoss,
 )

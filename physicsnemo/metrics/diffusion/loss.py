@@ -270,6 +270,93 @@ class EDMLoss:
         return loss
 
 
+class tEDMLoss:
+    """
+    Loss function proposed in the t-EDM paper. This should ideally be used in combination with `models.diffusion.preconditioning.tEDMPrecond`
+
+    Parameters
+    ----------
+    P_mean: float, optional
+        Mean value for `sigma` computation, by default -1.2.
+    P_std: float, optional:
+        Standard deviation for `sigma` computation, by default 1.2.
+    sigma_data: float, optional
+        Standard deviation for data, by default 0.5.
+
+    Note
+    ----
+    Reference: Pandey, K. et al. 2025. Heavy-Tailed Diffusion Models. International Conference on Learning Representations.
+    """
+
+    def __init__(
+        self, nu=10, P_mean: float = -1.2, P_std: float = 1.2, sigma_data: float = 0.5
+    ):
+        self.P_mean = P_mean
+        self.P_std = P_std
+        self.sigma_data = sigma_data
+        self.nu = nu
+        self.chi_dist = torch.distributions.Chi2(self.nu)
+
+    def __call__(self, net, images, condition=None, labels=None, augment_pipe=None):
+        """
+        Calculate and return the loss corresponding to the t-EDM formulation.
+
+        The method adds random noise to the input images and calculates the loss as the
+        square difference between the network's predictions and the input images.
+        The noise level is determined by 'sigma', which is computed as a function of
+        'P_mean' and 'P_std' random values. The calculated loss is weighted as a
+        function of 'sigma' and 'sigma_data'.
+
+        Parameters:
+        ----------
+        net: torch.nn.Module
+            The neural network model that will make predictions.
+
+        images: torch.Tensor
+            Input images to the neural network.
+
+        labels: torch.Tensor
+            Ground truth labels for the input images.
+
+        augment_pipe: callable, optional
+            An optional data augmentation function that takes images as input and
+            returns augmented images. If not provided, no data augmentation is applied.
+
+        Returns:
+        -------
+        torch.Tensor
+            A tensor representing the loss calculated based on the network's
+            predictions.
+        """
+        rnd_normal = torch.randn([images.shape[0], 1, 1, 1], device=images.device)
+        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
+
+        # NOTE: Scale sigma with the a scaling factor to account for nu
+        sigma_ = sigma * np.sqrt(self.nu / (self.nu - 2))
+        weight = (sigma_**2 + self.sigma_data**2) / (sigma_ * self.sigma_data) ** 2
+        y, augment_labels = (
+            augment_pipe(images) if augment_pipe is not None else (images, None)
+        )
+
+        # Sample Student-t noise
+        b, _, _, _ = images.shape
+        kappa = self.chi_dist.sample((b,)).to(images.device) / self.nu
+        kappa = kappa.view(b, 1, 1, 1)
+        n = (torch.randn_like(y) / torch.sqrt(kappa)) * sigma
+        if condition is not None:
+            D_yn = net(
+                y + n,
+                sigma,
+                condition=condition,
+                class_labels=labels,
+                augment_labels=augment_labels,
+            )
+        else:
+            D_yn = net(y + n, sigma, labels, augment_labels=augment_labels)
+        loss = weight * ((D_yn - y) ** 2)
+        return loss
+
+
 class EDMLossSR:
     """
     Variation of the loss function proposed in the EDM paper for Super-Resolution.

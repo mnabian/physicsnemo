@@ -1174,3 +1174,183 @@ class VEPrecond_dfsr_cond(torch.nn.Module):
         dw = torch.autograd.grad(residual_loss, w)[0]
 
         return dw
+
+
+@dataclass
+class tEDMPrecondMetaData(ModelMetaData):
+    """tEDMPrecond meta data"""
+
+    name: str = "tEDMPrecond"
+    # Optimization
+    jit: bool = False
+    cuda_graphs: bool = False
+    amp_cpu: bool = False
+    amp_gpu: bool = True
+    torch_fx: bool = False
+    # Data type
+    bf16: bool = False
+    # Inference
+    onnx: bool = False
+    # Physics informed
+    func_torch: bool = False
+    auto_grad: bool = False
+
+
+class tEDMPrecond(Module):
+    """
+    Preconditioning proposed in the paper "Heavy-Tailed Diffusion Models" (t-EDM)
+
+    Parameters
+    ----------
+    img_resolution : int
+        Image resolution.
+    img_channels : int
+        Number of color channels (for both input and output). If your model
+        requires a different number of input or output chanels,
+        override this by passing either of the optional
+        img_in_channels or img_out_channels args
+    nu: int
+        Number of degrees of freedom used for the Student-t generative prior. Ensure that this is strictly greater than 2.
+    label_dim : int
+        Number of class labels, 0 = unconditional, by default 0.
+    use_fp16 : bool
+        Execute the underlying model at FP16 precision?, by default False.
+    sigma_min : float
+        Minimum supported noise level, by default 0.0.
+    sigma_max : float
+        Maximum supported noise level, by default inf.
+    sigma_data : float
+        Expected standard deviation of the training data, by default 0.5.
+    model_type :str
+        Class name of the underlying model, by default "DhariwalUNet".
+    img_in_channels: int
+        Optional setting for when number of input channels =/= number of output
+        channels. If set, will override img_channels for the input
+        This is useful in the case of additional (conditional) channels
+    img_out_channels: int
+        Optional setting for when number of input channels =/= number of output
+        channels. If set, will override img_channels for the output
+    **model_kwargs : dict
+        Keyword arguments for the underlying model.
+
+    Note
+    ----
+    Reference: Pandey, K. et al. 2025. Heavy-Tailed Diffusion Models. International Conference on Learning Representations.
+    """
+
+    def __init__(
+        self,
+        img_resolution,
+        img_channels,
+        nu=10,
+        label_dim=0,
+        use_fp16=False,
+        sigma_min=0,
+        sigma_max=float("inf"),
+        sigma_data=0.5,
+        model_type="DhariwalUNet",
+        img_in_channels=None,
+        img_out_channels=None,
+        **model_kwargs,
+    ):
+        super().__init__()
+
+        # NOTE: Check if nu is greater than 2. This is to ensure the variance of the
+        # Student-t prior during sampling is finite.
+        if nu > 2:
+            raise ValueError(f"Expected nu to be greater than 2, but got {nu} instead.")
+
+        self.img_resolution = img_resolution
+        if img_in_channels is not None:
+            img_in_channels = img_in_channels
+        else:
+            img_in_channels = img_channels
+        if img_out_channels is not None:
+            img_out_channels = img_out_channels
+        else:
+            img_out_channels = img_channels
+
+        self.nu = nu
+        self.label_dim = label_dim
+        self.use_fp16 = use_fp16
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+        self.sigma_data = sigma_data
+
+        model_class = getattr(network_module, model_type)
+        self.model = model_class(
+            img_resolution=img_resolution,
+            in_channels=img_in_channels,
+            out_channels=img_out_channels,
+            label_dim=label_dim,
+            **model_kwargs,
+        )
+
+    def forward(
+        self,
+        x,
+        sigma,
+        condition=None,
+        class_labels=None,
+        force_fp32=False,
+        **model_kwargs,
+    ):
+        x = x.to(torch.float32)
+        sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
+
+        # Rescale sigma to account nu scaling
+        sigma = np.sqrt(self.nu / (self.nu - 2)) * sigma
+
+        class_labels = (
+            None
+            if self.label_dim == 0
+            else torch.zeros([1, self.label_dim], device=x.device)
+            if class_labels is None
+            else class_labels.to(torch.float32).reshape(-1, self.label_dim)
+        )
+        dtype = (
+            torch.float16
+            if (self.use_fp16 and not force_fp32 and x.device.type == "cuda")
+            else torch.float32
+        )
+
+        c_skip = self.sigma_data**2 / (sigma**2 + self.sigma_data**2)
+        c_out = sigma * self.sigma_data / (sigma**2 + self.sigma_data**2).sqrt()
+        c_in = 1 / (self.sigma_data**2 + sigma**2).sqrt()
+        c_noise = sigma.log() / 4
+
+        arg = c_in * x
+
+        if condition is not None:
+            arg = torch.cat([arg, condition], dim=1)
+
+        F_x = self.model(
+            arg.to(dtype),
+            c_noise.flatten(),
+            class_labels=class_labels,
+            **model_kwargs,
+        )
+
+        if (F_x.dtype != dtype) and not torch.is_autocast_enabled():
+            raise ValueError(
+                f"Expected the dtype to be {dtype}, but got {F_x.dtype} instead."
+            )
+        D_x = c_skip * x + c_out * F_x.to(torch.float32)
+        return D_x
+
+    @staticmethod
+    def round_sigma(sigma: Union[float, List, torch.Tensor]):
+        """
+        Convert a given sigma value(s) to a tensor representation.
+
+        Parameters
+        ----------
+        sigma : Union[float list, torch.Tensor]
+            The sigma value(s) to convert.
+
+        Returns
+        -------
+        torch.Tensor
+            The tensor representation of the provided sigma value(s).
+        """
+        return torch.as_tensor(sigma)

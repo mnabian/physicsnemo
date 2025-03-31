@@ -35,4 +35,5 @@ from .preconditioning import (
     iDDPMPrecond,
     VEPrecond_dfsr_cond,
     VEPrecond_dfsr,
+    tEDMPrecond,
 )

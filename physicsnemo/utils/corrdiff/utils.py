@@ -79,6 +79,8 @@ def diffusion_step(  # TODO generalize the module and add defaults
     device: torch.device,
     hr_mean: torch.Tensor = None,
     lead_time_label: torch.Tensor = None,
+    use_t_latents: bool = False,
+    nu: int = 0,
 ) -> torch.Tensor:
 
     """
@@ -120,15 +122,21 @@ def diffusion_step(  # TODO generalize the module and add defaults
 
             # Initialize random generator, and generate latents
             rnd = StackedRandomGenerator(device, batch_seeds)
-            latents = rnd.randn(
-                [
-                    seed_batch_size,
-                    img_out_channels,
-                    img_shape[0],
-                    img_shape[1],
-                ],
-                device=device,
-            ).to(memory_format=torch.channels_last)
+            if use_t_latents:
+                if nu <= 2:
+                    raise ValueError(
+                        f"Expected nu to be greater than 2 when use_t_latents=true. Found nu={nu} instead"
+                    )
+                latents = rnd.randt(
+                    nu,
+                    [seed_batch_size, img_out_channels, img_shape[0], img_shape[1]],
+                    device=device,
+                ).to(memory_format=torch.channels_last)
+            else:
+                latents = rnd.randn(
+                    [seed_batch_size, img_out_channels, img_shape[0], img_shape[1]],
+                    device=device,
+                ).to(memory_format=torch.channels_last)
 
             with torch.inference_mode():
                 images = sampler_fn(

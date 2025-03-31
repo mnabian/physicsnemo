@@ -252,6 +252,7 @@ can be enabled by setting the flag `config.generation.use_t_latents=True` and
 specifying the number of degrees of freedom `config.generation.nu` to be an
 integer greater than 2.
 
+Note that t-EDM is experimental and has not been used in CorrDiff training yet.
 
 
 ## References

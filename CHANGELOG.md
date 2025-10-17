@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and torch.nn.functional.pad.
 - Unified recipe for crash modeling, supporting Transolver and MeshGraphNet,
   and three transient schemes.
+- Added a check to `stochastic_sampler` that helps handle the `EDMPrecond` model,
+  which has a specific `.forward()` signature
 
 ### Changed
 
@@ -40,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and load them with `Module.save` and `Module.from_checkpoint`.
   **⚠️Warning:** - The modules have to be `physicsnemo.Module`s, and not
   `torch.nn.Module`s.
+- Support passing custom tokenizer, detokenizer, and attention `Module`s in
+  experimental DiT architecture
 
 ### Deprecated
 

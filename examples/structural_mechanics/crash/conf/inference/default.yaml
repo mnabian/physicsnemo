@@ -14,40 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# @package training
-
-# ┌───────────────────────────────────────────┐
-# │                   Data                    │
-# └───────────────────────────────────────────┘  
-
-raw_data_dir:  "/code/datasets/gm_crash/train"  # TODO change
-raw_data_dir_test: "/code/datasets/gm_crash/test"  # TODO change
-max_workers_preprocessing: 64  # Maximum parallel workers
-
-# ┌───────────────────────────────────────────┐
-# │                 Training                  │
-# └───────────────────────────────────────────┘  
-
-num_time_steps: 14
-num_training_samples: 2
-start_lr: 0.0001
-end_lr: 0.0000003
-epochs: 10000
-
-# ┌───────────────────────────────────────────┐
-# │        Performance Optimization           │
-# └───────────────────────────────────────────┘
-
-amp: True
-use_apex: True
-num_dataloader_workers: 8
-
-# ┌───────────────────────────────────────────┐
-# │           Logging Configuration           │
-# └───────────────────────────────────────────┘
-
-ckpt_path: "./checkpoints"
-tensorboard_log_dir: ./tensorboard_logs
 output_dir_pred: "./predicted_vtps"
 output_dir_exact: "./exact_vtps"
-write_vtp_in_inference: true
+raw_data_dir_test: "/code/datasets/gm_crash/test"

@@ -14,41 +14,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os, sys
+import os, sys, time, logging
 
 sys.path.insert(0, os.path.dirname(__file__))
-import time
+
 import hydra
-
-from hydra.utils import to_absolute_path
-import torch
-from tqdm import tqdm
-
+from hydra.utils import to_absolute_path, instantiate
 from omegaconf import DictConfig
-from omegaconf import OmegaConf
-import logging
 
+import torch
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 from physicsnemo.distributed.manager import DistributedManager
-from physicsnemo.launch.logging import (
-    PythonLogger,
-    RankZeroLoggingWrapper,
-)
-from hydra.utils import instantiate
+from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
-import os
-
-os.makedirs(os.path.expanduser("~/.dgl"), exist_ok=True)
-
-from torch.utils.tensorboard import SummaryWriter
+# Import unified datapipe
+from datapipe import SimSample, simsample_collate
 
 
 class Trainer:
-    """Trainer for the crash model."""
+    """Trainer for crash simulation models with unified SimSample input."""
 
     def __init__(self, cfg: DictConfig, logger0: RankZeroLoggingWrapper):
         assert DistributedManager.is_initialized()
@@ -57,12 +47,14 @@ class Trainer:
         self.rollout_steps = cfg.training.num_time_steps - 1
         self.amp = cfg.training.amp
 
+        # Dataset
         dataset = instantiate(
             cfg.datapipe,
             name="crash_train",
             split="train",
             logger=logger0,
         )
+        # Move stats to device
         self.data_stats = dict(
             node={k: v.to(self.dist.device) for k, v in dataset.node_stats.items()},
             edge={
@@ -73,6 +65,8 @@ class Trainer:
                 k: v.to(self.dist.device) for k, v in dataset.thickness_stats.items()
             },
         )
+
+        # Sampler
         if self.dist.world_size > 1:
             sampler = DistributedSampler(
                 dataset,
@@ -85,28 +79,26 @@ class Trainer:
 
         self.dataloader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=1,
+            batch_size=1,  # variable N per sample
             shuffle=(sampler is None),
             drop_last=True,
             pin_memory=True,
             num_workers=cfg.training.num_dataloader_workers,
             sampler=sampler,
-            collate_fn=lambda batch: batch[0],
+            collate_fn=simsample_collate,
         )
         self.sampler = sampler
 
-        # instantiate the model
+        # Model
         self.model = instantiate(cfg.model)
-        # Note: Hydra's instantiate() may reset the global logging level to WARNING,
-        # which suppresses INFO messages. Restore it to INFO.
         logging.getLogger().setLevel(logging.INFO)
-
-        # enable train mode
         self.model.to(self.dist.device)
         self.model.train()
 
+        # Loss
         self.criterion = torch.nn.MSELoss()
 
+        # Optimizer
         self.optimizer = None
         try:
             if cfg.training.use_apex:
@@ -116,22 +108,20 @@ class Trainer:
                     self.model.parameters(), lr=cfg.training.start_lr
                 )
         except ImportError:
-            logger0.warning(
-                "NVIDIA Apex (https://github.com/nvidia/apex) is not installed, "
-                "FusedAdam optimizer will not be used."
-            )
+            logger0.warning("Apex not installed, falling back to Adam optimizer.")
         if self.optimizer is None:
             self.optimizer = torch.optim.Adam(
                 self.model.parameters(), lr=cfg.training.start_lr
             )
         logger0.info(f"Using {self.optimizer.__class__.__name__} optimizer")
 
+        # Scheduler
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, T_max=cfg.training.epochs, eta_min=cfg.training.end_lr
         )
         self.scaler = GradScaler()
 
-        # load checkpoint
+        # Checkpoint
         if self.dist.world_size > 1:
             torch.distributed.barrier()
         self.epoch_init = load_checkpoint(
@@ -146,41 +136,36 @@ class Trainer:
         if self.dist.rank == 0:
             self.writer = SummaryWriter(log_dir=cfg.training.tensorboard_log_dir)
 
-    def train(self, graph, epoch):
+    def train(self, sample: SimSample, epoch: int):
         self.optimizer.zero_grad()
-        loss = self.forward(graph, epoch)
+        loss = self.forward(sample, epoch)
         self.backward(loss)
         return loss
 
-    def forward(self, graph, epoch):
-        # forward pass
+    def forward(self, sample: SimSample, epoch: int):
         with autocast(enabled=self.amp):
-            # # Build per-step conditioning sequence [T, N, 1]
             T = self.rollout_steps
 
-            # Predict rollout: [T, N, Fo]
+            # Model forward
             pred = self.model(
-                node_features=graph.ndata["x"],  # [N, Fn] at t=0
+                node_features=sample.node_features,  # [N, Fn]
+                edge_index=sample.edge_index,  # [2,E] or None
+                edge_features=sample.edge_features,  # [E,De] or None
                 data_stats=self.data_stats,
             )
 
-            # Target is currently [N, T*Fo] -> reshape to [T, N, Fo]
-            target_flat = graph.ndata["y"]  # [N, T*Fo]
+            # Reshape target
+            target_flat = sample.node_target  # [N, T*Fo]
             N = target_flat.size(0)
-            Fo = 3  # self.cfg.num_output_features
+            Fo = 3  # output features per node
             assert target_flat.size(1) == T * Fo, (
-                f"target dim {target_flat.size(1)} != T*Fo {T * Fo}"
+                f"target dim {target_flat.size(1)} != {T * Fo}"
             )
-            target = (
-                target_flat.view(N, T, Fo).transpose(0, 1).contiguous()
-            )  # [T, N, Fo]
+            target = target_flat.view(N, T, Fo).transpose(0, 1).contiguous()  # [T,N,Fo]
 
-            # Loss
-            loss = self.criterion(pred, target)
-            return loss
+            return self.criterion(pred, target)
 
     def backward(self, loss):
-        # backward pass
         if self.amp:
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
@@ -192,22 +177,20 @@ class Trainer:
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-    # initialize distributed manager
     DistributedManager.initialize()
     dist = DistributedManager()
 
-    logger = PythonLogger("main")  # General python logger
-    logger0 = RankZeroLoggingWrapper(logger, dist)  # Rank 0 logger
+    logger = PythonLogger("main")
+    logger0 = RankZeroLoggingWrapper(logger, dist)
     logger0.file_logging()
 
     trainer = Trainer(cfg, logger0)
-    start = time.time()
     logger0.info("Training started...")
+
     for epoch in range(trainer.epoch_init, cfg.training.epochs):
         if trainer.sampler is not None:
             trainer.sampler.set_epoch(epoch)
-        start = time.time()
-        # Wrap the dataloader with tqdm and add description with epoch info
+
         progress_bar = tqdm(
             trainer.dataloader,
             desc=f"Epoch {epoch + 1}/{cfg.training.epochs}",
@@ -217,28 +200,33 @@ def main(cfg: DictConfig) -> None:
 
         total_loss = 0.0
         num_batches = 0
+        start = time.time()
 
-        for graph in progress_bar:
-            graph = graph.to(dist.device)
-            loss = trainer.train(graph, epoch)
+        for sample in progress_bar:
+            sample = sample[0].to(dist.device)  # SimSample .to()
+            loss = trainer.train(sample, epoch)
             total_loss += loss.item()
             num_batches += 1
 
             progress_bar.set_postfix(loss=f"{loss.item():.3e}")
-            del graph
+            del sample
             torch.cuda.empty_cache()
+
         trainer.scheduler.step()
 
-        avg_loss = total_loss / num_batches if num_batches > 0 else float("nan")
+        avg_loss = total_loss / max(num_batches, 1)
         logger0.info(
-            f"epoch: {epoch + 1}, avg_loss: {avg_loss:10.3e}, lr: {trainer.optimizer.param_groups[0]['lr']:.3e}, time per epoch: {(time.time() - start):10.3e}"
+            f"epoch: {epoch + 1}, avg_loss: {avg_loss:10.3e}, "
+            f"lr: {trainer.optimizer.param_groups[0]['lr']:.3e}, "
+            f"time per epoch: {(time.time() - start):10.3e}"
         )
+
         if dist.rank == 0:
             trainer.writer.add_scalar("loss", avg_loss, epoch)
-            current_lr = trainer.optimizer.param_groups[0]["lr"]
-            trainer.writer.add_scalar("learning_rate", current_lr, epoch)
+            trainer.writer.add_scalar(
+                "learning_rate", trainer.optimizer.param_groups[0]["lr"], epoch
+            )
 
-        # save checkpoint
         if dist.world_size > 1:
             torch.distributed.barrier()
         if dist.rank == 0:
@@ -253,7 +241,7 @@ def main(cfg: DictConfig) -> None:
             logger.info(f"Saved model on rank {dist.rank}")
 
         torch.cuda.empty_cache()
-        start = time.time()
+
     logger0.info("Training completed!")
     if dist.rank == 0:
         trainer.writer.close()

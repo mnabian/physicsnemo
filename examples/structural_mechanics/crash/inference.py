@@ -14,225 +14,288 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import hydra
-from hydra.utils import to_absolute_path
-from dgl.dataloading import GraphDataLoader
-import numpy as np
-from omegaconf import DictConfig, OmegaConf
-import torch
-from torch.nn.parallel import DistributedDataParallel
-from physicsnemo.models.meshgraphnet import MeshGraphNet
-from crash_dataset import CrashDataset
-from physicsnemo.launch.logging import PythonLogger
-from physicsnemo.launch.utils import load_checkpoint
+import os, sys, logging, tempfile
 import pyvista as pv
 
-from mgnrollout import MGNRollout
-import tempfile, shutil, os
+sys.path.insert(0, os.path.dirname(__file__))
+
+import hydra
+from hydra.utils import to_absolute_path, instantiate
+from omegaconf import DictConfig
+
+import torch
+from torch.utils.data import DataLoader
+
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.launch.utils import load_checkpoint
+
+from datapipe import simsample_collate
+
+EPS = 1e-8
 
 
-# SIMPLIFIED: This function now saves results for a single sample at a time.
-def save_vtp_with_predictions_and_exact(
-    rollout, vtp_dir, output_dir_pred, output_dir_exact
+def denormalize_positions(
+    y: torch.Tensor, pos_mean: torch.Tensor, pos_std: torch.Tensor
+) -> torch.Tensor:
+    """Denormalize node positions [N,3] or [T,N,3]."""
+    if y.ndim == 2:  # [N,3]
+        return y * pos_std.view(1, -1) + pos_mean.view(1, -1)
+    elif y.ndim == 3:  # [T,N,3]
+        return y * pos_std.view(1, 1, -1) + pos_mean.view(1, 1, -1)
+    else:
+        raise AssertionError(f"Expected [N,3] or [T,N,3], got {y.shape}")
+
+
+def save_vtp_sequence(
+    preds,
+    exacts,
+    vtp_frames_dir,  # directory containing frame_XXX.vtp for this run
+    out_pred_dir,
+    out_exact_dir=None,
+    prefix="frame",
 ):
-    os.makedirs(output_dir_pred, exist_ok=True)
-    os.makedirs(output_dir_exact, exist_ok=True)
+    """
+    Save a sequence of predicted (and optional exact) positions to VTP files.
+    preds/exacts: list of [N,3] torch.Tensors
+    """
+    os.makedirs(out_pred_dir, exist_ok=True)
+    if exacts is not None and out_exact_dir is not None:
+        os.makedirs(out_exact_dir, exist_ok=True)
 
-    # The dataloader for this rollout only contains one sample, so we loop through it.
-    # rollout.preds will have the shape [[preds_t0, preds_t1, ...]]
-    for testi, (preds, exacts) in enumerate(zip(rollout.preds, rollout.exacts)):
-        # Create a subfolder for the batch item, e.g., "test_000"
-        test_pred_dir = os.path.join(output_dir_pred, f"test_{testi:03d}")
-        test_exact_dir = os.path.join(output_dir_exact, f"test_{testi:03d}")
-        os.makedirs(test_pred_dir, exist_ok=True)
-        os.makedirs(test_exact_dir, exist_ok=True)
+    T = len(preds)
+    for t in range(T):
+        vtp_file = os.path.join(vtp_frames_dir, f"{prefix}_{t:03d}.vtp")
+        if not os.path.exists(vtp_file):
+            logging.warning(f"Missing VTP frame: {vtp_file}, skipping timestep {t}.")
+            continue
 
-        for i, (pred, exact) in enumerate(zip(preds, exacts)):
-            vtp_file = os.path.join(vtp_dir, f"frame_{i:03d}.vtp")
-            if not os.path.exists(vtp_file):
-                print(f"Warning: {vtp_file} does not exist, skipping.")
-                continue
-
-            # Save predicted
-            mesh_pred = pv.read(vtp_file)
-            pred_np = pred.cpu().numpy() if hasattr(pred, "cpu") else pred
-            mesh_pred.points = pred_np
-            mesh_pred.point_data["prediction"] = pred_np
-            out_file_pred = os.path.join(test_pred_dir, f"frame_{i:03d}_pred.vtp")
-            mesh_pred.save(out_file_pred)
-
-            # Save exact
-            mesh_exact = pv.read(vtp_file)
-            exact_np = exact.cpu().numpy() if hasattr(exact, "cpu") else exact
-            mesh_exact.points = exact_np
-            mesh_exact.point_data["exact"] = exact_np
-            mesh_exact.point_data["difference"] = pred_np - exact_np
-            out_file_exact = os.path.join(test_exact_dir, f"frame_{i:03d}_exact.vtp")
-            mesh_exact.save(out_file_exact)
-
-
-class MGNTest:
-    # This class is now designed to handle one sample at a time.
-    def __init__(self, cfg: DictConfig, logger: PythonLogger, model=None):
-        self.num_time_steps = cfg.num_time_steps
-        self.num_output_features = cfg.num_output_features
-        self.rollout_steps = cfg.num_time_steps - 1
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        # The dataset is now created for a SINGLE sample directory
-        self.dataset = CrashDataset(
-            name="crash_test",
-            data_dir=to_absolute_path(cfg.raw_data_dir_test),
-            split="test",
-            num_samples=1,
-            num_steps=cfg.num_time_steps,
-            write_vtp=cfg.write_vtp_in_inference,
-        )
-
-        self.data_stats = dict(
-            node={k: v.to(self.device) for k, v in self.dataset.node_stats.items()},
-            edge={k: v.to(self.device) for k, v in self.dataset.edge_stats.items()},
-        )
-
-        self.dataloader = GraphDataLoader(
-            self.dataset,
-            batch_size=1,
-            shuffle=False,
-            drop_last=False,
-        )
-
-        # Use the pre-loaded model passed from the main loop
-        # if model is not None:
-        #     self.model = model
-        # else:
-        # Fallback to load model here if not provided (not used in the main loop)
-        self.model = MGNRollout(
-            functional_dim=5,
-            out_dim=cfg.num_output_features,
-            embedding_dim=3,
-            slice_num=128,
-            n_layers=8,
-            unified_pos=False,
-            structured_shape=None,
-            use_te=False,
-            time_input=False,
-            rollout_steps=self.rollout_steps,
-        )
-        # Abridged for brevity...
-        self.model = self.model.to(self.device)
-        if hasattr(cfg, "ckpt_path"):
-            load_checkpoint(
-                to_absolute_path(cfg.ckpt_path), models=self.model, device=self.device
+        pred_np = preds[t].detach().cpu().numpy()
+        mesh_pred = pv.read(vtp_file)
+        if pred_np.shape[0] != mesh_pred.n_points:
+            logging.warning(
+                f"Point mismatch at t={t}: pred {pred_np.shape[0]} vs mesh {mesh_pred.n_points}"
             )
+            continue
 
+        # Predicted
+        mesh_pred.points = pred_np
+        mesh_pred.point_data["prediction"] = pred_np
+        mesh_pred.save(os.path.join(out_pred_dir, f"{prefix}_{t:03d}_pred.vtp"))
+
+        # Exact + difference
+        if exacts is not None and out_exact_dir is not None:
+            exact_np = exacts[t].detach().cpu().numpy()
+            if exact_np.shape[0] != mesh_pred.n_points:
+                logging.warning(
+                    f"Exact mismatch at t={t}: {exact_np.shape[0]} vs mesh {mesh_pred.n_points}"
+                )
+            else:
+                mesh_exact = pv.read(vtp_file)
+                mesh_exact.points = exact_np
+                mesh_exact.point_data["exact"] = exact_np
+                mesh_exact.point_data["difference"] = pred_np - exact_np
+                mesh_exact.save(
+                    os.path.join(out_exact_dir, f"{prefix}_{t:03d}_exact.vtp")
+                )
+
+
+class InferenceWorker:
+    """
+    Creates the model once and runs inference on a single run-directory at a time.
+    Each rank calls `run_on_single_run(run_path)` for its assigned runs.
+    """
+
+    def __init__(self, cfg: DictConfig, logger: PythonLogger, dist: DistributedManager):
+        self.cfg = cfg
+        self.logger = logger
+        self.dist = dist
+        self.device = dist.device
+
+        # Build model once per rank
+        self.model = instantiate(cfg.model)
+        logging.getLogger().setLevel(logging.INFO)
+        self.model.to(self.device)
         self.model.eval()
 
+        ckpt_path = cfg.training.ckpt_path
+        load_checkpoint(ckpt_path, models=self.model, device=self.device)
+        self.logger.info(f"[Rank {dist.rank}] Loaded checkpoint {ckpt_path}")
+
+        # For VTP exporting
+        self.vtp_prefix = cfg.inference.get("vtp_prefix", "frame")
+        self.write_vtp = True
+
+        # Output roots
+        self.out_pred_root = cfg.inference.get("output_dir_pred", "./predicted_vtps")
+        self.out_exact_root = cfg.inference.get("output_dir_exact", "./exact_vtps")
+
+        # How many timesteps to roll out
+        self.T = cfg.training.num_time_steps - 1
+        self.Fo = 3
+
+        # Dataloader workers (for single-sample run datasets this can be 0 or small)
+        self.num_workers = cfg.training.num_dataloader_workers
+
     @torch.no_grad()
-    def predict(self):
-        # Simplified: no need to track sample names inside the class
-        self.preds, self.exacts, self.graphs = [], [], []
-        stats = {
-            key: value.to(self.device) for key, value in self.dataset.node_stats.items()
-        }
+    def run_on_single_run(self, run_path: str):
+        """
+        Process a single run directory: build a one-run dataset with a temporary symlink, run inference, and save outputs.
+        """
+        run_name = os.path.basename(run_path)
+        self.logger.info(f"[Rank {self.dist.rank}] Processing run: {run_name}")
 
-        # The dataloader will yield the single graph for the current sample
-        for i, graph in enumerate(self.dataloader):
-            graph = graph.to(self.device)
-            T_pred = self.rollout_steps
+        # Create a temporary directory exposing this run as the ONLY child (as your original script did)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.symlink(run_path, os.path.join(tmpdir, run_name))
 
-            num_nodes = graph.ndata["y"].shape[0]
-            exact_sequence = graph.ndata["y"].view(num_nodes, T_pred, 3).transpose(0, 1)
-
-            model_module = (
-                self.model.module
-                if isinstance(self.model, DistributedDataParallel)
-                else self.model
+            # Instantiate a dataset that sees exactly one run
+            dataset = instantiate(
+                self.cfg.datapipe,
+                name="crash_test",
+                split="test",
+                num_steps=self.cfg.training.num_time_steps,
+                num_samples=1,
+                write_vtp=True,  # ensures it writes ./output_<run_name>/frame_*.vtp
+                logger=self.logger,
+                data_dir=tmpdir,  # IMPORTANT: dataset reads from the tmpdir with single run
             )
 
-            pred_sequence = model_module.forward_rollout(
-                graph.ndata["x"],
-                self.data_stats,
+            # Data stats for de/normalization
+            data_stats = dict(
+                node={k: v.to(self.device) for k, v in dataset.node_stats.items()},
+                edge={
+                    k: v.to(self.device)
+                    for k, v in getattr(dataset, "edge_stats", {}).items()
+                },
+                thickness={
+                    k: v.to(self.device) for k, v in dataset.thickness_stats.items()
+                },
             )
 
-            # Store results for this sample
-            current_preds, current_exacts = [], []
-            for t in range(T_pred):
-                exact_denorm = self.dataset.denormalize(
-                    exact_sequence[t], stats["pos_mean"], stats["pos_std"]
-                )
-                pred_denorm = self.dataset.denormalize(
-                    pred_sequence[t], stats["pos_mean"], stats["pos_std"]
-                )
-                current_preds.append(pred_denorm)
-                current_exacts.append(exact_denorm)
+            # Simple 1-sample loader
+            dataloader = DataLoader(
+                dataset,
+                batch_size=1,
+                shuffle=False,
+                drop_last=False,
+                pin_memory=True,
+                num_workers=self.num_workers,
+                collate_fn=simsample_collate,
+            )
 
-            self.preds.append(current_preds)
-            self.exacts.append(current_exacts)
-            self.graphs.append([graph] * T_pred)
+            # VTP frames directory generated by the dataset for THIS run
+            vtp_frames_dir = os.path.join(os.getcwd(), f"output_{run_name}")
 
-        self.preds = [[pi.cpu() for pi in p_list] for p_list in self.preds]
-        self.exacts = [[ei.cpu() for ei in e_list] for e_list in self.exacts]
-        self.graphs = [[gi.cpu() for gi in g_list] for g_list in self.graphs]
+            pos_mean = data_stats["node"]["pos_mean"]
+            pos_std = data_stats["node"]["pos_std"]
+
+            for local_idx, sample in enumerate(dataloader):
+                if isinstance(sample, list):
+                    sample = sample[0]
+                sample = sample.to(self.device)
+
+                # Forward rollout: expected to return [T,N,3]
+                pred_seq = self.model(
+                    node_features=sample.node_features,
+                    edge_index=sample.edge_index,
+                    edge_features=sample.edge_features,
+                    data_stats=data_stats,
+                )
+
+                # Exact sequence (if provided)
+                exact_seq = None
+                if sample.node_target is not None:
+                    N = sample.node_target.size(0)
+                    assert sample.node_target.size(1) == self.T * self.Fo
+                    exact_seq = (
+                        sample.node_target.view(N, self.T, self.Fo)
+                        .transpose(0, 1)
+                        .contiguous()
+                    )
+
+                # Denormalize
+                pred_seq_denorm = [
+                    denormalize_positions(pred_seq[t], pos_mean, pos_std)
+                    for t in range(pred_seq.size(0))
+                ]
+                exact_seq_denorm = (
+                    [
+                        denormalize_positions(exact_seq[t], pos_mean, pos_std)
+                        for t in range(self.T)
+                    ]
+                    if exact_seq is not None
+                    else None
+                )
+
+                # Save VTPs (rank-separated, run-separated)
+                if self.write_vtp:
+                    sample_tag = f"{run_name}"
+                    pred_dir = os.path.join(
+                        self.out_pred_root, f"rank{self.dist.rank}", sample_tag
+                    )
+                    exact_dir = (
+                        os.path.join(
+                            self.out_exact_root, f"rank{self.dist.rank}", sample_tag
+                        )
+                        if exact_seq_denorm
+                        else None
+                    )
+
+                    if not os.path.isdir(vtp_frames_dir):
+                        self.logger.warning(
+                            f"[Rank {self.dist.rank}] Missing VTP frames dir {vtp_frames_dir}; skipping export."
+                        )
+                    else:
+                        save_vtp_sequence(
+                            preds=pred_seq_denorm,
+                            exacts=exact_seq_denorm,
+                            vtp_frames_dir=vtp_frames_dir,
+                            out_pred_dir=pred_dir,
+                            out_exact_dir=exact_dir,
+                            prefix=self.vtp_prefix,
+                        )
+
+            self.logger.info(f"[Rank {self.dist.rank}] Finished run: {run_name}")
 
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
-def main(cfg: DictConfig) -> None:
-    logger = PythonLogger("main")
-    logger.file_logging()
-    logger.info("Batch inference started...")
+def main(cfg: DictConfig):
+    # Initialize distributed (one process per GPU via torchrun)
+    DistributedManager.initialize()
+    dist = DistributedManager()
 
-    # ===== 1. Load Model Once =====
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Using {device} device for model.")
+    logger = PythonLogger("inference")
+    logger0 = RankZeroLoggingWrapper(logger, dist)
+    logger0.file_logging()
+    logging.getLogger().setLevel(logging.INFO)
 
-    # ===== 2. Get Parent Directory and Find Samples =====
-    parent_dir = to_absolute_path(cfg.raw_data_dir_test)
+    # Discover all Run* directories under the parent test folder
+    parent_dir = to_absolute_path(cfg.inference.raw_data_dir_test)
     if not os.path.isdir(parent_dir):
-        logger.error(f"Parent directory not found: {parent_dir}")
+        logger0.error(f"Parent directory not found: {parent_dir}")
         return
 
-    try:
-        sample_paths = [d.path for d in os.scandir(parent_dir) if d.is_dir()]
-    except OSError as e:
-        logger.error(f"Error reading directories from {parent_dir}: {e}")
+    run_dirs = [d.path for d in os.scandir(parent_dir) if d.is_dir()]
+    run_dirs.sort()
+
+    if len(run_dirs) == 0:
+        logger0.error(f"No run directories found under: {parent_dir}")
         return
 
-    logger.info(f"Found {len(sample_paths)} samples in {parent_dir}")
+    logger0.info(f"Found {len(run_dirs)} runs under {parent_dir}")
 
-    # ===== 3. Loop Through Each Sample =====
-    for sample_path in sample_paths:
-        sample_name = os.path.basename(sample_path)
-        logger.info(f"--- Processing sample: {sample_name} ---")
+    # Shard run list across ranks: rank r processes run_dirs[r::world_size]
+    my_runs = run_dirs[dist.rank :: dist.world_size]
+    logger.info(f"[Rank {dist.rank}] Assigned {len(my_runs)} runs.")
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.symlink(sample_path, os.path.join(tmpdir, os.path.basename(sample_path)))
-            sample_cfg = OmegaConf.create(OmegaConf.to_yaml(cfg))
-            sample_cfg.raw_data_dir_test = (
-                tmpdir  # points to a parent with exactly one run inside
-            )
-            sample_cfg.num_test_samples = 1
-            rollout = MGNTest(sample_cfg, logger, model=None)
-            rollout.predict()
-            if sample_cfg.write_vtp_in_inference:
-                vtp_dir = "output_" + sample_name
-                out_pred = os.path.join(
-                    to_absolute_path(
-                        sample_cfg.get("output_dir_pred", "./predicted_vtps")
-                    ),
-                    sample_name,
-                )
-                out_exact = os.path.join(
-                    to_absolute_path(
-                        sample_cfg.get("output_dir_exact", "./exact_vtps")
-                    ),
-                    sample_name,
-                )
-                save_vtp_with_predictions_and_exact(
-                    rollout, vtp_dir, out_pred, out_exact
-                )
+    worker = InferenceWorker(cfg, logger, dist)
 
-    logger.info("Batch inference finished successfully.")
+    for run_path in my_runs:
+        worker.run_on_single_run(run_path)
+
+    if dist.rank == 0:
+        logger0.info("Inference completed successfully.")
 
 
 if __name__ == "__main__":

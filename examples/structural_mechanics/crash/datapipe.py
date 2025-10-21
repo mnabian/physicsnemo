@@ -46,16 +46,14 @@ class SimSample:
     ---------
     node_features : FloatTensor [N, Din]
     node_target   : FloatTensor [N, Dout] or [N, (T-1)*3] depending on task
-    edge_index    : LongTensor [2, E] or None
-    edge_features : FloatTensor [E, De] or None
+    graph         : DGLGraph or None
     """
 
     def __init__(
         self,
         node_features: torch.Tensor,
         node_target: torch.Tensor,
-        edge_index: Optional[torch.Tensor] = None,
-        edge_features: Optional[torch.Tensor] = None,
+        graph: Optional["dgl.DGLGraph"] = None,
     ):
         assert node_features.ndim == 2, (
             f"node_features must be [N, D], got {node_features.shape}"
@@ -63,34 +61,20 @@ class SimSample:
         assert node_target.ndim >= 2, (
             f"node_target must be [N, ...], got {node_target.shape}"
         )
-        if edge_index is not None:
-            assert edge_index.dtype in (torch.int64, torch.long), (
-                "edge_index must be LongTensor"
-            )
-            assert edge_index.ndim == 2 and edge_index.shape[0] == 2, (
-                f"edge_index must be [2, E], got {edge_index.shape}"
-            )
-        if edge_features is not None:
-            assert edge_features.ndim == 2, (
-                f"edge_features must be [E, De], got {edge_features.shape}"
-            )
 
         self.node_features = node_features
         self.node_target = node_target
-        self.edge_index = edge_index
-        self.edge_features = edge_features
+        self.graph = graph  # DGL graph or None
 
     def to(self, device: torch.device):
         self.node_features = self.node_features.to(device)
         self.node_target = self.node_target.to(device)
-        if self.edge_index is not None:
-            self.edge_index = self.edge_index.to(device)
-        if self.edge_features is not None:
-            self.edge_features = self.edge_features.to(device)
+        if self.graph is not None:
+            self.graph = self.graph.to(device)
         return self
 
     def is_graph(self) -> bool:
-        return self.edge_index is not None
+        return self.graph is not None
 
     def __repr__(self) -> str:
         n = self.node_features.shape[0]
@@ -100,7 +84,7 @@ class SimSample:
             if self.node_target.ndim == 2
             else tuple(self.node_target.shape[1:])
         )
-        e = 0 if self.edge_index is None else self.edge_index.shape[1]
+        e = 0 if self.graph is None else self.graph.num_edges()
         return f"SimSample(N={n}, Din={din}, Dout={dout}, E={e})"
 
 
@@ -349,12 +333,7 @@ class CrashGraphDataset(CrashBaseDataset):
         self.graphs: List["dgl.DGLGraph"] = []
         for i in range(self.num_samples):
             g = self.create_graph(self.srcs[i], self.dsts[i], dtype=torch.int32)
-            # Use initial raw position (t=0) to build edge features (relative disp + norm)
-            pos0 = self.mesh_pos_seq[i][0] * torch.as_tensor(
-                self.node_stats["pos_std"]
-            ) + torch.as_tensor(
-                self.node_stats["pos_mean"]
-            )  # denormalize to match original behavior
+            pos0 = self.mesh_pos_seq[i][0]
             g = self.add_edge_features(g, pos0)
             self.graphs.append(g)
 
@@ -389,17 +368,12 @@ class CrashGraphDataset(CrashBaseDataset):
     def __getitem__(self, idx: int):
         assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
         g = self.graphs[idx]
-        x, y = self.build_xy(idx)
-
-        row, col = g.edges()
-        edge_index = torch.stack([row.long(), col.long()], dim=0)  # [2,E], int64
-        edge_features = g.edata["x"].to(torch.float32)  # [E,De]
+        x, y = self.build_xy(idx)  # [N,4], [N,(T-1)*3]
 
         return SimSample(
             node_features=x,
             node_target=y,
-            edge_index=edge_index,
-            edge_features=edge_features,
+            graph=g,
         )
 
     # ----- graph-specific helpers -----

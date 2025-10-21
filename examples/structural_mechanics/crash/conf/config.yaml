@@ -25,8 +25,8 @@ experiment_desc: "unified training recipe for crash models"
 run_desc: "unified training recipe for crash models"
 
 defaults:
-  - datapipe/point_cloud
-  - model/transolver_autoregressive_rollout_training
-  - training/default
-  - inference/default
+  - datapipe: point_cloud   # will be overridden by model configs
+  - model: transolver_autoregressive_rollout_training
+  - training: default
+  - inference: default
   - _self_

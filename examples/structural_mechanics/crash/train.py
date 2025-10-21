@@ -47,6 +47,21 @@ class Trainer:
         self.rollout_steps = cfg.training.num_time_steps - 1
         self.amp = cfg.training.amp
 
+        # --- Consistency check between model and datapipe ---
+        model_name = cfg.model._target_
+        datapipe_name = cfg.datapipe._target_
+
+        if "MeshGraphNet" in model_name and "GraphDataset" not in datapipe_name:
+            raise ValueError(
+                f"Model {model_name} requires a graph datapipe, "
+                f"but you selected {datapipe_name}."
+            )
+        if "Transolver" in model_name and "PointCloudDataset" not in datapipe_name:
+            raise ValueError(
+                f"Model {model_name} requires a point-cloud datapipe, "
+                f"but you selected {datapipe_name}."
+            )
+
         # Dataset
         dataset = instantiate(
             cfg.datapipe,
@@ -95,6 +110,16 @@ class Trainer:
         self.model.to(self.dist.device)
         self.model.train()
 
+        # distributed data parallel for multi-node training
+        if self.dist.world_size > 1:
+            self.model = DistributedDataParallel(
+                self.model,
+                device_ids=[self.dist.local_rank],
+                output_device=self.dist.device,
+                broadcast_buffers=self.dist.broadcast_buffers,
+                find_unused_parameters=self.dist.find_unused_parameters,
+            )
+
         # Loss
         self.criterion = torch.nn.MSELoss()
 
@@ -125,7 +150,7 @@ class Trainer:
         if self.dist.world_size > 1:
             torch.distributed.barrier()
         self.epoch_init = load_checkpoint(
-            to_absolute_path(cfg.training.ckpt_path),
+            cfg.training.ckpt_path,
             models=self.model,
             optimizer=self.optimizer,
             scheduler=self.scheduler,
@@ -147,12 +172,7 @@ class Trainer:
             T = self.rollout_steps
 
             # Model forward
-            pred = self.model(
-                node_features=sample.node_features,  # [N, Fn]
-                edge_index=sample.edge_index,  # [2,E] or None
-                edge_features=sample.edge_features,  # [E,De] or None
-                data_stats=self.data_stats,
-            )
+            pred = self.model(sample=sample, data_stats=self.data_stats)
 
             # Reshape target
             target_flat = sample.node_target  # [N, T*Fo]

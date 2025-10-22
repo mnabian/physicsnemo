@@ -108,15 +108,20 @@ class TransolverTimeConditionalRollout(Transolver):
     """
 
     def __init__(self, *args, **kwargs):
+        self.dt: float = kwargs.pop("dt")
+        self.initial_vel: torch.Tensor = kwargs.pop("initial_vel")
         self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
+        self.forward = getattr(self, kwargs.pop("forward_fn"))
         super().__init__(*args, **kwargs)
 
-    def forward(
+    def forward_time_conditional_direct(
         self,
         sample: SimSample,
         data_stats: dict,
     ) -> torch.Tensor:
         """
+        Direct computation of solutaion at time t from initial conditions.
+        y_(t+1) = y_0 + Transolver(y_0, t)
         Args:
             Sample: SimSample containing node_features and node_target
             data_stats: dict containing normalization stats
@@ -128,27 +133,161 @@ class TransolverTimeConditionalRollout(Transolver):
             f"Expected node_features [N,4], got {node_features.shape}"
         )
 
-        x = node_features[..., :3]  # initial pos
+        y_t1 = node_features[..., :3]
+        y_t0 = y_t1 - self.initial_vel * self.dt
+        x = y_t0.clone()
+        # x = node_features[..., :3]  # initial pos
         thickness = node_features[..., -1:]
         outputs: List[torch.Tensor] = []
         time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
 
+        def step_fn(**kwargs):
+            return super(TransolverTimeConditionalRollout, self).forward(**kwargs)
+
         for time in time_seq:
             fx_t = thickness  # [N,1]
-            outf = (
-                super(TransolverTimeConditionalRollout, self)
-                .forward(
+            if self.training:
+                outf = ckpt(
+                    step_fn,
                     fx=fx_t.unsqueeze(0),
                     embedding=x.unsqueeze(0),
                     time=time.unsqueeze(0),
-                )
-                .squeeze(0)
-            )
+                    use_reentrant=False,
+                ).squeeze(0)
+            else:
+                outf = step_fn(
+                    fx=fx_t.unsqueeze(0),
+                    embedding=x.unsqueeze(0),
+                    time=time.unsqueeze(0),
+                ).squeeze(0)
 
             y_t2 = x + outf
             outputs.append(y_t2.clone())
 
         return torch.stack(outputs, dim=0)  # [T,N,3]
+
+    def forward_time_conditional_rollout(
+        self,
+        sample: SimSample,
+        data_stats: dict,
+    ) -> torch.Tensor:
+        """
+        Auto-regressive computation of solutaion at time t+1 from solution at time t.
+        acc = Transolver(y_0, t)
+        y_(t+1) = 2y_t - y_(t-1) + dt^2 * acc
+        Args:
+            Sample: SimSample containing node_features and node_target
+            data_stats: dict containing normalization stats
+        Returns:
+            [T, N, 3] rollout of predicted positions
+        """
+        node_features = sample.node_features  # [N,4] (pos(3) + thickness(1))
+        assert node_features.ndim == 2 and node_features.shape[1] == 4, (
+            f"Expected node_features [N,4], got {node_features.shape}"
+        )
+
+        y_t1 = node_features[..., :3]
+        thickness = node_features[..., -1:]
+        y_t0 = y_t1 - self.initial_vel * self.dt
+        x = y_t0.clone()
+        outputs: List[torch.Tensor] = []
+        time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
+
+        def step_fn(**kwargs):
+            return super(TransolverTimeConditionalRollout, self).forward(**kwargs)
+
+        for time in time_seq:
+            fx_t = thickness  # [N,1]
+
+            if self.training:
+                outf = ckpt(
+                    step_fn,
+                    fx=fx_t.unsqueeze(0),
+                    embedding=x.unsqueeze(0),
+                    time=time.unsqueeze(0),
+                    use_reentrant=False,
+                ).squeeze(0)
+            else:
+                outf = step_fn(
+                    fx=fx_t.unsqueeze(0),
+                    embedding=x.unsqueeze(0),
+                    time=time.unsqueeze(0),
+                ).squeeze(0)
+
+            acc = (
+                outf * data_stats["node"]["norm_acc_std"]
+                + data_stats["node"]["norm_acc_mean"]
+            )
+            y_t2 = 2*y_t1 - y_t0 + self.dt**2 * acc
+            outputs.append(y_t2.clone())
+            y_t1, y_t0 = y_t2, y_t1
+        return torch.stack(outputs, dim=0)
+
+    def forward_time_conditional_rollout_crank_nicolson(
+        self,
+        sample: SimSample,
+        data_stats: dict,
+    ) -> torch.Tensor:
+        """
+        Crank-Nicolson method for auto-regressive computation of solutaion at time t+1 from solution at time t and time t+1.
+        acc_t, acc_(t+1) = Transolver(y_0, t), Transolver(y_0, t+1)
+        y_(t+1) = 2y_t - y_(t-1) + dt^2 * (acc_t + acc_(t+1)) / 2
+        Args:
+            Sample: SimSample containing node_features and node_target
+            data_stats: dict containing normalization stats
+        Returns:
+            [T, N, 3] rollout of predicted positions
+        """
+
+        def step_fn(**kwargs):
+            return super(TransolverTimeConditionalRollout, self).forward(**kwargs)
+
+        def step_fn_acc(fx_t, x, time):
+
+            if self.training:
+                outf = ckpt(
+                    step_fn,
+                    fx=fx_t.unsqueeze(0),
+                    embedding=x.unsqueeze(0),
+                    time=time.unsqueeze(0),
+                    use_reentrant=False,
+                ).squeeze(0)
+            else:
+                outf = step_fn(
+                    fx=fx_t.unsqueeze(0),
+                    embedding=x.unsqueeze(0),
+                    time=time.unsqueeze(0),
+                ).squeeze(0)
+
+            acc = (
+                outf * data_stats["node"]["norm_acc_std"]
+                + data_stats["node"]["norm_acc_mean"]
+            )
+            return acc
+
+        node_features = sample.node_features  # [N,4] (pos(3) + thickness(1))
+        assert node_features.ndim == 2 and node_features.shape[1] == 4, (
+            f"Expected node_features [N,4], got {node_features.shape}"
+        )
+
+        y_t1 = node_features[..., :3]
+        thickness = node_features[..., -1:]
+        y_t0 = y_t1 - self.initial_vel * self.dt
+        x = y_t0.clone()
+        outputs: List[torch.Tensor] = []
+        time_seq = torch.linspace(0.0, 1.0, self.rollout_steps+1, device=x.device)
+
+        fx_t = thickness
+        acc_prev = step_fn_acc(fx_t, x, time_seq[0])
+        for time in time_seq[1:]:
+            fx_t = thickness
+            acc = step_fn_acc(fx_t, x, time)
+            acc_cn = (acc + acc_prev) / 2
+            y_t2 = 2*y_t1 - y_t0 + self.dt**2 * acc_cn
+            outputs.append(y_t2.clone())
+            y_t1, y_t0 = y_t2, y_t1
+            acc_prev = acc
+        return torch.stack(outputs, dim=0)
 
 
 class MeshGraphNetAutoregressiveRolloutTraining(MeshGraphNet):

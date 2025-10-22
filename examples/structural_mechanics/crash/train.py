@@ -107,33 +107,19 @@ class Trainer:
         self.sampler = sampler
 
         if validation:
-            val_logger = PythonLogger("validation")
             # Create a validation dataset
             val_cfg = self.cfg.datapipe
             with open_dict(val_cfg):   # or open_dict(cfg) to open the whole tree
                 val_cfg.data_dir = self.cfg.training.raw_data_dir_test
+                val_cfg.num_samples = self.dist.world_size
 
             # TODO: move num_val_samples to config
-            num_val_samples = self.dist.world_size
-            # Instantiate a dataset that sees exactly one run
             val_dataset = instantiate(
                 val_cfg,
                 name="crash_test",
                 split="test",
-                num_samples=num_val_samples,
-                logger=val_logger,
-                # data_dir=tmpdir,  # IMPORTANT: dataset reads from the tmpdir with single run
+                logger=logger0,
             )
-            # # Simple 1-sample loader
-            # self.val_dataloader = torch.utils.data.DataLoader(
-            #     val_dataset,
-            #     batch_size=num_samples,
-            #     shuffle=False,
-            #     drop_last=False,
-            #     pin_memory=True,
-            #     num_workers=cfg.training.num_dataloader_workers,
-            #     collate_fn=simsample_collate,
-            # )
             # Sampler
             if self.dist.world_size > 1:
                 sampler = DistributedSampler(

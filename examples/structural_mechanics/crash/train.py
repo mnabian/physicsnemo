@@ -35,12 +35,14 @@ from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
 # Import unified datapipe
 from datapipe import SimSample, simsample_collate
+from omegaconf import open_dict
+from inference import denormalize_positions
 
 
 class Trainer:
     """Trainer for crash simulation models with unified SimSample input."""
 
-    def __init__(self, cfg: DictConfig, logger0: RankZeroLoggingWrapper):
+    def __init__(self, cfg: DictConfig, logger0: RankZeroLoggingWrapper, validation: bool = True):
         assert DistributedManager.is_initialized()
         self.dist = DistributedManager()
         self.cfg = cfg
@@ -103,6 +105,56 @@ class Trainer:
             collate_fn=simsample_collate,
         )
         self.sampler = sampler
+
+        if validation:
+            val_logger = PythonLogger("validation")
+            # Create a validation dataset
+            val_cfg = self.cfg.datapipe
+            with open_dict(val_cfg):   # or open_dict(cfg) to open the whole tree
+                val_cfg.data_dir = self.cfg.training.raw_data_dir_test
+
+            # TODO: move num_val_samples to config
+            num_val_samples = self.dist.world_size
+            # Instantiate a dataset that sees exactly one run
+            val_dataset = instantiate(
+                val_cfg,
+                name="crash_test",
+                split="test",
+                num_samples=num_val_samples,
+                logger=val_logger,
+                # data_dir=tmpdir,  # IMPORTANT: dataset reads from the tmpdir with single run
+            )
+            # # Simple 1-sample loader
+            # self.val_dataloader = torch.utils.data.DataLoader(
+            #     val_dataset,
+            #     batch_size=num_samples,
+            #     shuffle=False,
+            #     drop_last=False,
+            #     pin_memory=True,
+            #     num_workers=cfg.training.num_dataloader_workers,
+            #     collate_fn=simsample_collate,
+            # )
+            # Sampler
+            if self.dist.world_size > 1:
+                sampler = DistributedSampler(
+                    dataset,
+                    num_replicas=self.dist.world_size,
+                    rank=self.dist.rank,
+                    shuffle=True,
+                )
+            else:
+                sampler = None
+
+            self.val_dataloader = torch.utils.data.DataLoader(
+                val_dataset,
+                batch_size=1,  # variable N per sample
+                shuffle=(sampler is None),
+                drop_last=True,
+                pin_memory=True,
+                num_workers=cfg.training.num_dataloader_workers,
+                sampler=sampler,
+                collate_fn=simsample_collate,
+            )
 
         # Model
         self.model = instantiate(cfg.model)
@@ -194,6 +246,75 @@ class Trainer:
             loss.backward()
             self.optimizer.step()
 
+    @torch.no_grad()
+    def validate_with_rollout(self, epoch):
+        """Run validation using the rollout approach with relative error computation"""
+        self.model.eval()
+        
+        for local_idx, sample in enumerate(self.val_dataloader):
+            # TODO: parallelize this
+            if isinstance(sample, list):
+                sample = sample[0]
+            sample = sample.to(self.dist.device)
+            T = self.rollout_steps
+            Fo = 3
+            # Forward rollout: expected to return [T,N,3]
+            pred_seq = self.model(sample=sample, data_stats=self.data_stats)
+
+            # Exact sequence (if provided)
+            exact_seq = None
+            if sample.node_target is not None:
+                N = sample.node_target.size(0)
+                assert sample.node_target.size(1) == T * Fo
+                exact_seq = (
+                    sample.node_target.view(N, T, Fo)
+                    .transpose(0, 1)
+                    .contiguous()
+                )
+
+            pos_mean = self.data_stats["node"]["pos_mean"]
+            pos_std = self.data_stats["node"]["pos_std"]
+
+            # Denormalize
+            self.pred_seq_denorm = [
+                denormalize_positions(pred_seq[t], pos_mean, pos_std)
+                for t in range(pred_seq.size(0))
+            ]
+            self.exact_seq_denorm = (
+                [
+                    denormalize_positions(exact_seq[t], pos_mean, pos_std)
+                    for t in range(T)
+                ]
+                if exact_seq is not None
+                else None
+            )
+
+        # self.logger.info(f"[Rank {self.dist.rank}] Finished run: {run_name}")
+
+        # Compute detailed relative error losses
+        SqError = torch.square(torch.stack(self.pred_seq_denorm) - torch.stack(self.exact_seq_denorm))
+        MSE_w_time = torch.mean(SqError, dim=(1,2))
+        SE_std_w_time = torch.std(SqError, dim=(1,2))
+        MSE = torch.mean(SqError)
+        SE_std  = torch.std(SqError)
+
+        if self.dist.world_size > 1:
+            torch.distributed.all_reduce(MSE, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(SE_std, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(MSE_w_time, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(SE_std_w_time, op=torch.distributed.ReduceOp.SUM)
+        
+        # Combine all statistics
+        val_stats = {
+            'MSE_w_time': MSE_w_time / self.dist.world_size,
+            'SE_std_w_time': SE_std_w_time / self.dist.world_size,
+            'MSE': MSE / self.dist.world_size,
+            'SE_std': SE_std / self.dist.world_size,
+        }
+        
+        self.model.train()  # Switch back to training mode
+        return val_stats
+
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
@@ -259,6 +380,29 @@ def main(cfg: DictConfig) -> None:
                 epoch=epoch + 1,
             )
             logger.info(f"Saved model on rank {dist.rank}")
+
+        # Validation
+        #TODO: Add validation frequency to config
+        val_freq = 10
+        if (epoch + 1) % val_freq == 0:
+            # logger0.info(f"Validation started...")
+            val_stats = trainer.validate_with_rollout(epoch)
+            
+            # Log detailed validation statistics
+            logger0.info(
+                f"Validation epoch {epoch+1}: "
+                f"MSE: {val_stats['MSE']:.3e}, "
+            )
+            
+            if dist.rank == 0:
+                # Log to tensorboard
+                trainer.writer.add_scalar("val/MSE", val_stats['MSE'], epoch)
+                trainer.writer.add_scalar("val/SE_std", val_stats['SE_std'], epoch)
+                
+                # Log individual timestep relative errors
+                for i in range(len(val_stats['MSE_w_time'])):
+                    trainer.writer.add_scalar(f"val/timestep_{i}_MSE", val_stats['MSE_w_time'][i], epoch)
+                    trainer.writer.add_scalar(f"val/timestep_{i}_SE_std", val_stats['SE_std_w_time'][i], epoch)
 
         torch.cuda.empty_cache()
 

@@ -107,40 +107,45 @@ class Trainer:
         self.sampler = sampler
 
         if validation:
+            # TODO: move num_val_samples to config
+            self.num_val_samples = 8
+            self.num_val_replicas = min(self.dist.world_size, self.num_val_samples)
             # Create a validation dataset
             val_cfg = self.cfg.datapipe
             with open_dict(val_cfg):   # or open_dict(cfg) to open the whole tree
                 val_cfg.data_dir = self.cfg.training.raw_data_dir_test
-                val_cfg.num_samples = self.dist.world_size
+                val_cfg.num_samples = self.num_val_samples
 
-            # TODO: move num_val_samples to config
             val_dataset = instantiate(
                 val_cfg,
                 name="crash_test",
                 split="test",
                 logger=logger0,
             )
-            # Sampler
-            if self.dist.world_size > 1:
-                sampler = DistributedSampler(
-                    dataset,
-                    num_replicas=self.dist.world_size,
-                    rank=self.dist.rank,
-                    shuffle=True,
+            if self.dist.rank < self.num_val_replicas:
+                # Sampler
+                if self.dist.world_size > 1:
+                    sampler = DistributedSampler(
+                        val_dataset,
+                        num_replicas=self.num_val_replicas,
+                        rank=self.dist.rank,
+                        shuffle=True,
+                    )
+                else:
+                    sampler = None
+
+                self.val_dataloader = torch.utils.data.DataLoader(
+                    val_dataset,
+                    batch_size=1,  # variable N per sample
+                    shuffle=(sampler is None),
+                    drop_last=True,
+                    pin_memory=True,
+                    num_workers=cfg.training.num_dataloader_workers,
+                    sampler=sampler,
+                    collate_fn=simsample_collate,
                 )
             else:
-                sampler = None
-
-            self.val_dataloader = torch.utils.data.DataLoader(
-                val_dataset,
-                batch_size=1,  # variable N per sample
-                shuffle=(sampler is None),
-                drop_last=True,
-                pin_memory=True,
-                num_workers=cfg.training.num_dataloader_workers,
-                sampler=sampler,
-                collate_fn=simsample_collate,
-            )
+                self.val_dataloader = torch.utils.data.DataLoader(torch.utils.data.Subset(val_dataset, []), batch_size=1)
 
         # Model
         self.model = instantiate(cfg.model)
@@ -237,6 +242,10 @@ class Trainer:
         """Run validation using the rollout approach with relative error computation"""
         self.model.eval()
         
+        MSE = torch.zeros(1, device=self.dist.device)
+        SE_std = torch.zeros(1, device=self.dist.device)
+        MSE_w_time = torch.zeros(self.rollout_steps, device=self.dist.device)
+        SE_std_w_time = torch.zeros(self.rollout_steps, device=self.dist.device)
         for local_idx, sample in enumerate(self.val_dataloader):
             # TODO: parallelize this
             if isinstance(sample, list):
@@ -275,14 +284,12 @@ class Trainer:
                 else None
             )
 
-        # self.logger.info(f"[Rank {self.dist.rank}] Finished run: {run_name}")
-
-        # Compute detailed relative error losses
-        SqError = torch.square(torch.stack(self.pred_seq_denorm) - torch.stack(self.exact_seq_denorm))
-        MSE_w_time = torch.mean(SqError, dim=(1,2))
-        SE_std_w_time = torch.std(SqError, dim=(1,2))
-        MSE = torch.mean(SqError)
-        SE_std  = torch.std(SqError)
+            # Compute detailed relative error losses
+            SqError = torch.square(torch.stack(self.pred_seq_denorm) - torch.stack(self.exact_seq_denorm))
+            MSE_w_time += torch.mean(SqError, dim=(1,2))
+            SE_std_w_time += torch.std(SqError, dim=(1,2))
+            MSE += torch.mean(SqError)
+            SE_std += torch.std(SqError)
 
         if self.dist.world_size > 1:
             torch.distributed.all_reduce(MSE, op=torch.distributed.ReduceOp.SUM)
@@ -292,10 +299,10 @@ class Trainer:
         
         # Combine all statistics
         val_stats = {
-            'MSE_w_time': MSE_w_time / self.dist.world_size,
-            'SE_std_w_time': SE_std_w_time / self.dist.world_size,
-            'MSE': MSE / self.dist.world_size,
-            'SE_std': SE_std / self.dist.world_size,
+            'MSE_w_time': MSE_w_time / self.num_val_samples,
+            'SE_std_w_time': SE_std_w_time / self.num_val_samples,
+            'MSE': MSE / self.num_val_samples,
+            'SE_std': SE_std / self.num_val_samples,
         }
         
         self.model.train()  # Switch back to training mode
@@ -377,18 +384,18 @@ def main(cfg: DictConfig) -> None:
             # Log detailed validation statistics
             logger0.info(
                 f"Validation epoch {epoch+1}: "
-                f"MSE: {val_stats['MSE']:.3e}, "
+                f"MSE: {val_stats['MSE'].item():.3e}, "
             )
             
             if dist.rank == 0:
                 # Log to tensorboard
-                trainer.writer.add_scalar("val/MSE", val_stats['MSE'], epoch)
-                trainer.writer.add_scalar("val/SE_std", val_stats['SE_std'], epoch)
+                trainer.writer.add_scalar("val/MSE", val_stats['MSE'].item(), epoch)
+                trainer.writer.add_scalar("val/SE_std", val_stats['SE_std'].item(), epoch)
                 
                 # Log individual timestep relative errors
                 for i in range(len(val_stats['MSE_w_time'])):
-                    trainer.writer.add_scalar(f"val/timestep_{i}_MSE", val_stats['MSE_w_time'][i], epoch)
-                    trainer.writer.add_scalar(f"val/timestep_{i}_SE_std", val_stats['SE_std_w_time'][i], epoch)
+                    trainer.writer.add_scalar(f"val/timestep_{i}_MSE", val_stats['MSE_w_time'][i].item(), epoch)
+                    trainer.writer.add_scalar(f"val/timestep_{i}_SE_std", val_stats['SE_std_w_time'][i].item(), epoch)
 
         torch.cuda.empty_cache()
 

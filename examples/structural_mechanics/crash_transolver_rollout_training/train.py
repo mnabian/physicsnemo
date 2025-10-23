@@ -14,19 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import sys
-import time
-import logging
+import os, sys, time, logging
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 import hydra
-from hydra.utils import instantiate
+from hydra.utils import to_absolute_path, instantiate
 from omegaconf import DictConfig
 
 import torch
-from torch.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
@@ -85,12 +82,15 @@ class Trainer:
         )
 
         # Sampler
-        sampler = DistributedSampler(
-            dataset,
-            num_replicas=self.dist.world_size,
-            rank=self.dist.rank,
-            shuffle=True,
-        )
+        if self.dist.world_size > 1:
+            sampler = DistributedSampler(
+                dataset,
+                num_replicas=self.dist.world_size,
+                rank=self.dist.rank,
+                shuffle=True,
+            )
+        else:
+            sampler = None
 
         self.dataloader = torch.utils.data.DataLoader(
             dataset,
@@ -144,7 +144,7 @@ class Trainer:
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, T_max=cfg.training.epochs, eta_min=cfg.training.end_lr
         )
-        self.scaler = GradScaler("cuda", enabled=self.amp)
+        self.scaler = GradScaler()
 
         # Checkpoint
         if self.dist.world_size > 1:
@@ -168,7 +168,7 @@ class Trainer:
         return loss
 
     def forward(self, sample: SimSample, epoch: int):
-        with autocast(device_type="cuda", enabled=self.amp):
+        with autocast(enabled=self.amp):
             T = self.rollout_steps
 
             # Model forward
@@ -211,15 +211,26 @@ def main(cfg: DictConfig) -> None:
         if trainer.sampler is not None:
             trainer.sampler.set_epoch(epoch)
 
+        progress_bar = tqdm(
+            trainer.dataloader,
+            desc=f"Epoch {epoch + 1}/{cfg.training.epochs}",
+            leave=False,
+            disable=True,
+        )
+
         total_loss = 0.0
         num_batches = 0
         start = time.time()
 
-        for sample in trainer.dataloader:
+        for sample in progress_bar:
             sample = sample[0].to(dist.device)  # SimSample .to()
             loss = trainer.train(sample, epoch)
             total_loss += loss.item()
             num_batches += 1
+
+            progress_bar.set_postfix(loss=f"{loss.item():.3e}")
+            del sample
+            torch.cuda.empty_cache()
 
         trainer.scheduler.step()
 
@@ -248,6 +259,8 @@ def main(cfg: DictConfig) -> None:
                 epoch=epoch + 1,
             )
             logger.info(f"Saved model on rank {dist.rank}")
+
+        torch.cuda.empty_cache()
 
     logger0.info("Training completed!")
     if dist.rank == 0:

@@ -94,7 +94,7 @@ class TransolverAutoregressiveRolloutTraining(Transolver):
             vel = self.dt * acc + vel
             y_t2 = self.dt * vel + y_t1
 
-            outputs.append(y_t2)
+            outputs.append(y_t2.clone())
             y_t1, y_t0 = y_t2, y_t1
 
         return torch.stack(outputs, dim=0)  # [T,N,3]
@@ -146,7 +146,7 @@ class TransolverTimeConditionalRollout(Transolver):
             )
 
             y_t2 = x + outf
-            outputs.append(y_t2)
+            outputs.append(y_t2.clone())
 
         return torch.stack(outputs, dim=0)  # [T,N,3]
 
@@ -204,7 +204,7 @@ class MeshGraphNetAutoregressiveRolloutTraining(MeshGraphNet):
             vel = self.dt * acc + vel
             y_t2 = self.dt * vel + y_t1
 
-            outputs.append(y_t2)
+            outputs.append(y_t2.clone())
             y_t1, y_t0 = y_t2, y_t1
 
         return torch.stack(outputs, dim=0)
@@ -240,7 +240,7 @@ class MeshGraphNetTimeConditionalRollout(MeshGraphNet):
                 node_features=fx_t, edge_features=edge_features, graph=graph
             )
             y_t2 = x + outf
-            outputs.append(y_t2)
+            outputs.append(y_t2.clone())
 
         return torch.stack(outputs, dim=0)
 
@@ -309,7 +309,7 @@ class TransolverOneStepRollout(
             vel_pred = self.dt * acc + vel
             y_t2_pred = self.dt * vel_pred + y_t1
 
-            outputs.append(y_t2_pred)
+            outputs.append(y_t2_pred.clone())
 
             if not self.training:
                 # autoregressive update for inference
@@ -383,7 +383,7 @@ class MeshGraphNetOneStepRollout(MeshGraphNet):
             vel_pred = self.dt * acc + vel
             y_t2_pred = self.dt * vel_pred + y_t1
 
-            outputs.append(y_t2_pred)
+            outputs.append(y_t2_pred.clone())
 
             if not self.training:
                 # Autoregressive update

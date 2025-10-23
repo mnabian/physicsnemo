@@ -14,12 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
-import os
-import pyvista as pv
-
 from lasso.dyna import D3plot, ArrayType
-from typing import Dict, List, Optional
+import pyvista as pv
+import os
+import numpy as np
+from typing import Dict, List, Tuple, Optional
 
 
 def find_run_folders(base_data_dir: str) -> List[str]:

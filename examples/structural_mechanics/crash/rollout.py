@@ -135,24 +135,15 @@ class TransolverTimeConditionalRollout(Transolver):
 
         for time in time_seq:
             fx_t = thickness  # [N,1]
-
-            def step_fn(fx, embedding, time_t):
-                return super(TransolverTimeConditionalRollout, self).forward(
-                    fx=fx, embedding=embedding, time=time_t
+            outf = (
+                super(TransolverTimeConditionalRollout, self)
+                .forward(
+                    fx=fx_t.unsqueeze(0),
+                    embedding=x.unsqueeze(0),
+                    time=time.unsqueeze(0),
                 )
-
-            if self.training:
-                outf = ckpt(
-                    step_fn,
-                    fx_t.unsqueeze(0),
-                    x.unsqueeze(0),
-                    time.unsqueeze(0),
-                    use_reentrant=False,
-                ).squeeze(0)
-            else:
-                outf = step_fn(
-                    fx_t.unsqueeze(0), x.unsqueeze(0), time.unsqueeze(0)
-                ).squeeze(0)
+                .squeeze(0)
+            )
 
             y_t2 = x + outf
             outputs.append(y_t2)
@@ -178,7 +169,7 @@ class MeshGraphNetAutoregressiveRolloutTraining(MeshGraphNet):
             [T, N, 3] rollout of predicted positions
         """
         node_features = sample.node_features
-        edge_features = sample.graph.edge_attr
+        edge_features = sample.graph.edata["x"]
         graph = sample.graph
 
         N = node_features.size(0)
@@ -235,7 +226,7 @@ class MeshGraphNetTimeConditionalRollout(MeshGraphNet):
             [T, N, 3] rollout of predicted positions
         """
         node_features = sample.node_features
-        edge_features = sample.graph.edge_attr
+        edge_features = sample.graph.edata["x"]
         graph = sample.graph
 
         x = node_features[..., :3]
@@ -245,18 +236,9 @@ class MeshGraphNetTimeConditionalRollout(MeshGraphNet):
 
         for time in time_seq:
             fx_t = torch.cat([x, thickness, time.expand(x.size(0), 1)], dim=-1)
-
-            def step_fn(nf, ef, g):
-                return super(MeshGraphNetTimeConditionalRollout, self).forward(
-                    node_features=nf, edge_features=ef, graph=g
-                )
-
-            outf = (
-                ckpt(step_fn, fx_t, edge_features, graph, use_reentrant=False)
-                if self.training
-                else step_fn(fx_t, edge_features, graph)
+            outf = super(MeshGraphNetTimeConditionalRollout, self).forward(
+                node_features=fx_t, edge_features=edge_features, graph=graph
             )
-
             y_t2 = x + outf
             outputs.append(y_t2)
 
@@ -351,7 +333,7 @@ class MeshGraphNetOneStepRollout(MeshGraphNet):
 
     def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
         node_features = sample.node_features
-        edge_features = sample.graph.edge_attr
+        edge_features = sample.graph.edata["x"]
         graph = sample.graph
 
         N = node_features.size(0)

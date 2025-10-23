@@ -20,16 +20,11 @@ import torch
 from typing import Optional, List, Dict, Any, Tuple
 
 from d3plot_reader import process_d3plot_data
+from torch_geometric.data import Data
+from torch_geometric.utils import coalesce, add_self_loops
+
 from physicsnemo.datapipes.gnn.utils import load_json, save_json
 from physicsnemo.launch.logging import PythonLogger
-
-try:
-    import dgl
-except ImportError:
-    raise ImportError(
-        "Graph dataset requires DGL. Install a suitable CUDA version: https://www.dgl.ai/pages/start.html"
-    )
-
 
 STATS_DIRNAME = "stats"
 NODE_STATS_FILE = "node_stats.json"
@@ -46,14 +41,14 @@ class SimSample:
     ---------
     node_features : FloatTensor [N, Din]
     node_target   : FloatTensor [N, Dout] or [N, (T-1)*3] depending on task
-    graph         : DGLGraph or None
+    graph         : PyG Data or None
     """
 
     def __init__(
         self,
         node_features: torch.Tensor,
         node_target: torch.Tensor,
-        graph: Optional["dgl.DGLGraph"] = None,
+        graph: Optional[Data] = None,
     ):
         assert node_features.ndim == 2, (
             f"node_features must be [N, D], got {node_features.shape}"
@@ -64,7 +59,7 @@ class SimSample:
 
         self.node_features = node_features
         self.node_target = node_target
-        self.graph = graph  # DGL graph or None
+        self.graph = graph  # PyG Data or None
 
     def to(self, device: torch.device):
         self.node_features = self.node_features.to(device)
@@ -84,7 +79,7 @@ class SimSample:
             if self.node_target.ndim == 2
             else tuple(self.node_target.shape[1:])
         )
-        e = 0 if self.graph is None else self.graph.num_edges()
+        e = 0 if self.graph is None else self.graph.num_edges
         return f"SimSample(N={n}, Din={din}, Dout={dout}, E={e})"
 
 
@@ -305,22 +300,13 @@ class CrashBaseDataset:
 class CrashGraphDataset(CrashBaseDataset):
     """
     Graph version:
-      - Builds DGL graphs (create_graph + add_self_loop)
+      - Builds PyG graphs (create_graph + add_self_loop)
       - Computes/loads edge stats and normalizes edge features
       - Returns SimSample with edge_index/edge_features
     """
 
     def __init__(self, *args, **kwargs):
-        # Import dgl here so point-cloud users don't need DGL installed
-        try:
-            import dgl  # noqa: F401
-        except ImportError as e:
-            raise ImportError(
-                "CrashGraphDataset requires DGL. Install a suitable CUDA version: https://www.dgl.ai/pages/start.html"
-            ) from e
         super().__init__(*args, **kwargs)
-
-        import dgl  # local scope
 
         # Filter self-edges and create graphs
         _srcs, _dsts = [], []
@@ -330,9 +316,14 @@ class CrashGraphDataset(CrashBaseDataset):
             _dsts.append(np.asarray(dst)[mask])
         self.srcs, self.dsts = _srcs, _dsts
 
-        self.graphs: List["dgl.DGLGraph"] = []
+        self.graphs: List[Data] = []
         for i in range(self.num_samples):
-            g = self.create_graph(self.srcs[i], self.dsts[i], dtype=torch.int32)
+            g = self.create_graph(
+                self.srcs[i],
+                self.dsts[i],
+                num_nodes=self.mesh_pos_seq[i][0].shape[0],
+                dtype=torch.long,
+            )
             pos0 = self.mesh_pos_seq[i][0]
             g = self.add_edge_features(g, pos0)
             self.graphs.append(g)
@@ -359,8 +350,8 @@ class CrashGraphDataset(CrashBaseDataset):
 
         # Normalize edge features
         for i in range(self.num_samples):
-            self.graphs[i].edata["x"] = self._normalize_edge(
-                self.graphs[i].edata["x"],
+            self.graphs[i].edge_attr = self._normalize_edge(
+                self.graphs[i].edge_attr,
                 self.edge_stats["edge_mean"],
                 self.edge_stats["edge_std"],
             )
@@ -378,33 +369,31 @@ class CrashGraphDataset(CrashBaseDataset):
 
     # ----- graph-specific helpers -----
     @staticmethod
-    def create_graph(src, dst, dtype=torch.int32):
-        import dgl
-
-        src = np.asarray(src)
-        dst = np.asarray(dst)
-        src_bidirected = np.concatenate([src, dst])
-        dst_bidirected = np.concatenate([dst, src])
-        graph = dgl.graph((src_bidirected, dst_bidirected), idtype=dtype)
-        graph = dgl.to_simple(graph)
-        graph = dgl.add_self_loop(graph)
-        return graph
+    def create_graph(src, dst, num_nodes: int, dtype=torch.long):
+        src = torch.as_tensor(src, dtype=dtype)
+        dst = torch.as_tensor(dst, dtype=dtype)
+        edge_index = torch.stack(
+            [torch.cat([src, dst]), torch.cat([dst, src])], dim=0
+        )  # [2, E]
+        edge_index, _ = coalesce(edge_index, None, num_nodes=num_nodes)
+        edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
+        return Data(edge_index=edge_index, num_nodes=num_nodes)
 
     @staticmethod
-    def add_edge_features(graph, pos):
+    def add_edge_features(data: Data, pos: torch.Tensor) -> Data:
         # pos: [N,3] (denormalized)
-        row, col = graph.edges()
+        row, col = data.edge_index
         pos_t = torch.as_tensor(pos, dtype=torch.float32)
-        disp = pos_t[row.long()] - pos_t[col.long()]  # [E,3]
+        disp = pos_t[row] - pos_t[col]  # [E,3]
         disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)  # [E,1]
-        graph.edata["x"] = torch.cat((disp, disp_norm), dim=1)  # [E,4]
-        return graph
+        data.edge_attr = torch.cat((disp, disp_norm), dim=1)  # [E,4]
+        return data
 
     def _compute_edge_stats(self):
         edge_mean = None
         edge_meansqr = None
         for i in range(self.num_samples):
-            x_e = self.graphs[i].edata["x"].to(torch.float32)  # [E,De]
+            x_e = self.graphs[i].edge_attr.to(torch.float32)  # [E,De]
             m = torch.mean(x_e, dim=0)
             msq = torch.mean(x_e * x_e, dim=0)
             edge_mean = m if edge_mean is None else edge_mean + m / self.num_samples

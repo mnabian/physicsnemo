@@ -155,7 +155,7 @@ class CrashBaseDataset:
         thk_stats_path = os.path.join(self._stats_dir, THK_STATS_FILE)
 
         if self.split == "train":
-            self.node_stats = self._compute_areg_node_stats()
+            self.node_stats = self._compute_autoreg_node_stats()
             self.thickness_stats = self._compute_thickness_stats()
             save_json(self.node_stats, node_stats_path)
             save_json(self.thickness_stats, thk_stats_path)
@@ -223,7 +223,7 @@ class CrashBaseDataset:
         return x, y
 
     # ---- stats helpers ----
-    def _compute_areg_node_stats(self):
+    def _compute_autoreg_node_stats(self):
         """
         Compute per-coordinate stats of normalized kinematics.
         pos_mean/std are computed in raw space then used to normalize velocity/acc.

@@ -161,13 +161,13 @@ class Trainer:
         if self.dist.rank == 0:
             self.writer = SummaryWriter(log_dir=cfg.training.tensorboard_log_dir)
 
-    def train(self, sample: SimSample, epoch: int):
+    def train(self, sample: SimSample):
         self.optimizer.zero_grad()
-        loss = self.forward(sample, epoch)
+        loss = self.forward(sample)
         self.backward(loss)
         return loss
 
-    def forward(self, sample: SimSample, epoch: int):
+    def forward(self, sample: SimSample):
         with autocast(device_type="cuda", enabled=self.amp):
             T = self.rollout_steps
 
@@ -217,7 +217,7 @@ def main(cfg: DictConfig) -> None:
 
         for sample in trainer.dataloader:
             sample = sample[0].to(dist.device)  # SimSample .to()
-            loss = trainer.train(sample, epoch)
+            loss = trainer.train(sample)
             total_loss += loss.item()
             num_batches += 1
 

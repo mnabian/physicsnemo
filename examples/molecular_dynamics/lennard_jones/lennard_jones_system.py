@@ -194,7 +194,7 @@ def main(cfg: DictConfig) -> None:
                 g = pyg.data.Data(edge_index=edge_index).to(dist.device)
 
                 node_fea = torch.ones(
-                    size=(pos.shape[0], cfg.model.hidden_dim_edge_encoder)
+                    size=(pos.shape[0], cfg.model.input_dim_nodes)
                 ).to(dist.device)
                 edge_fea = (
                     torch.tensor(np.array(edge_features), dtype=torch.float32)
@@ -255,7 +255,7 @@ def main(cfg: DictConfig) -> None:
                         )
                         g = pyg.data.Data(edge_index=edge_index).to(dist.device)
                         node_fea = torch.ones(
-                            size=(pos.shape[0], cfg.model.hidden_dim_edge_encoder)
+                            size=(pos.shape[0], cfg.model.input_dim_nodes)
                         ).to(dist.device)
                         edge_fea = (
                             torch.tensor(np.array(edge_features), dtype=torch.float32)

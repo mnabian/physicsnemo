@@ -1,9 +1,11 @@
 # Shallow Water Equations - Distributed GraphCast
 
-> **Note**: This example is currently not functional. Distributed mode (partition_size > 1)
-is not supported with the PyG backend. Support for distributed message passing using PyG
-backend will likely be included in a future release. Until then, this example will raise
-a `NotImplementedError` when attempting to use distributed mode.
+> **Note**: This example is currently not functional. Distributed mode
+(partition_size > 1) is not supported with the PyG backend.
+Support for distributed message passing using PyG
+backend will likely be included in a future release.
+Until then, this example will raise a `NotImplementedError` when
+attempting to use distributed mode.
 
 This example demonstrates how to leverage a distributed version of GraphCast to scale
 to larger Graph Neural Network (GNN) workloads.

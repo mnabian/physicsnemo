@@ -132,7 +132,7 @@ def main(cfg: DictConfig) -> None:
         mlp_activation_fn=cfg.model.mlp_activation_fn,
         num_layers_node_processor=cfg.model.num_layers_node_processor,
         num_layers_edge_processor=cfg.model.num_layers_edge_processor,
-        num_layers_node_encoder=None,  # No node encoder
+        num_layers_node_encoder=1,
         num_layers_node_decoder=cfg.model.num_layers_node_decoder,
         hidden_dim_edge_encoder=cfg.model.hidden_dim_edge_encoder,
     ).to(dist.device)

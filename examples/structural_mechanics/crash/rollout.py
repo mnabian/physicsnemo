@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,12 +18,86 @@ import torch
 from torch.utils.checkpoint import checkpoint as ckpt
 
 from physicsnemo.models.transolver import Transolver
-from physicsnemo.models.meshgraphnet import MeshGraphNet
+#from physicsnemo.models.meshgraphnet import MeshGraphNet
 from physicsnemo.models.figconvnet.figconvunet import FIGConvUNet
+from physicsnemo.experimental.models.geotransolver import GeoTransolver
 
 from datapipe import SimSample
 
 EPS = 1e-8
+
+
+class GeoTransolverAutoregressiveRolloutTraining(GeoTransolver):
+    """
+    GeoTransolver model with autoregressive rollout training.
+
+    Predicts sequence by autoregressively updating velocity and position
+    using predicted accelerations. Supports gradient checkpointing during training.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.dt: float = kwargs.pop("dt")
+        #self.initial_vel: torch.Tensor = kwargs.pop("initial_vel")
+        self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
+        super().__init__(*args, **kwargs)
+
+    def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
+        """
+        Args:
+            sample: SimSample containing node_features and node_target
+            data_stats: dict containing normalization stats
+        Returns:
+            [T, N, 3] rollout of predicted positions
+        """
+        inputs = sample.node_features
+        coords = inputs["coords"]  # [N,3]
+        features = inputs.get("features", coords.new_zeros((coords.size(0), 0)))
+        initial_vel = sample.global_features["velocity_x"].item()  # TODO mnabian needs better handling for unification
+        global_features = torch.stack([sample.global_features[k] for k in sample.global_features.keys()], dim=0)
+        N = coords.size(0)
+        device = coords.device
+
+        # Initial states
+        y_t1 = coords  # [N,3]
+        y_t0 = y_t1 - initial_vel * self.dt  # backstep using initial velocity
+
+        outputs: list[torch.Tensor] = []
+        for t in range(self.rollout_steps):
+            # Velocity normalization
+            vel = (y_t1 - y_t0) / self.dt
+            vel_norm = (vel - data_stats["node"]["norm_vel_mean"]) / (
+                data_stats["node"]["norm_vel_std"] + EPS
+            )
+
+            # Model input
+            fx_t = torch.cat(
+                [vel_norm, y_t1, features], dim=-1
+            )  # [N, 3+3+F]
+
+            def step_fn(fx, embedding, global_embedding):
+                return super(GeoTransolverAutoregressiveRolloutTraining, self).forward(
+                    local_embedding=fx, geometry=embedding, local_positions=embedding, global_embedding=global_embedding
+                )
+
+            if self.training:
+                outf = ckpt(
+                    step_fn, fx_t.unsqueeze(0), y_t1.unsqueeze(0), global_features.unsqueeze(0).unsqueeze(0), use_reentrant=False
+                ).squeeze(0)
+            else:
+                outf = step_fn(fx_t.unsqueeze(0), y_t1.unsqueeze(0), global_features.unsqueeze(0).unsqueeze(0)).squeeze(0)
+
+            # De-normalize acceleration
+            acc = (
+                outf * data_stats["node"]["norm_acc_std"]
+                + data_stats["node"]["norm_acc_mean"]
+            )
+            vel = self.dt * acc + vel
+            y_t2 = self.dt * vel + y_t1
+
+            outputs.append(y_t2)
+            y_t1, y_t0 = y_t2, y_t1
+
+        return torch.stack(outputs, dim=0)  # [T,N,3]
 
 
 class TransolverAutoregressiveRolloutTraining(Transolver):
@@ -157,110 +231,110 @@ class TransolverTimeConditionalRollout(Transolver):
         return torch.stack(outputs, dim=0)  # [T,N,3]
 
 
-class MeshGraphNetAutoregressiveRolloutTraining(MeshGraphNet):
-    """MeshGraphNet with autoregressive rollout training."""
+# class MeshGraphNetAutoregressiveRolloutTraining(MeshGraphNet):
+#     """MeshGraphNet with autoregressive rollout training."""
 
-    def __init__(self, *args, **kwargs):
-        self.dt: float = kwargs.pop("dt")
-        self.initial_vel: torch.Tensor = kwargs.pop("initial_vel")
-        self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
-        super().__init__(*args, **kwargs)
+#     def __init__(self, *args, **kwargs):
+#         self.dt: float = kwargs.pop("dt")
+#         self.initial_vel: torch.Tensor = kwargs.pop("initial_vel")
+#         self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
+#         super().__init__(*args, **kwargs)
 
-    def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
-        """
-        Args:
-            Sample: SimSample containing node_features and node_target
-            data_stats: dict containing normalization stats
-        Returns:
-            [T, N, 3] rollout of predicted positions
-        """
-        inputs = sample.node_features
-        coords = inputs["coords"]  # [N,3]
-        features = inputs.get(
-            "features", coords.new_zeros((coords.size(0), 0))
-        )  # [N,F]
-        edge_features = sample.graph.edge_attr
-        graph = sample.graph
+#     def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
+#         """
+#         Args:
+#             Sample: SimSample containing node_features and node_target
+#             data_stats: dict containing normalization stats
+#         Returns:
+#             [T, N, 3] rollout of predicted positions
+#         """
+#         inputs = sample.node_features
+#         coords = inputs["coords"]  # [N,3]
+#         features = inputs.get(
+#             "features", coords.new_zeros((coords.size(0), 0))
+#         )  # [N,F]
+#         edge_features = sample.graph.edge_attr
+#         graph = sample.graph
 
-        N = coords.size(0)
-        y_t1 = coords
-        y_t0 = y_t1 - self.initial_vel * self.dt
+#         N = coords.size(0)
+#         y_t1 = coords
+#         y_t0 = y_t1 - self.initial_vel * self.dt
 
-        outputs: list[torch.Tensor] = []
-        for _ in range(self.rollout_steps):
-            vel = (y_t1 - y_t0) / self.dt
-            vel_norm = (vel - data_stats["node"]["norm_vel_mean"]) / (
-                data_stats["node"]["norm_vel_std"] + EPS
-            )
-            fx_t = torch.cat([y_t1, vel_norm, features], dim=-1)
+#         outputs: list[torch.Tensor] = []
+#         for _ in range(self.rollout_steps):
+#             vel = (y_t1 - y_t0) / self.dt
+#             vel_norm = (vel - data_stats["node"]["norm_vel_mean"]) / (
+#                 data_stats["node"]["norm_vel_std"] + EPS
+#             )
+#             fx_t = torch.cat([y_t1, vel_norm, features], dim=-1)
 
-            def step_fn(nf, ef, g):
-                return super(MeshGraphNetAutoregressiveRolloutTraining, self).forward(
-                    node_features=nf, edge_features=ef, graph=g
-                )
+#             def step_fn(nf, ef, g):
+#                 return super(MeshGraphNetAutoregressiveRolloutTraining, self).forward(
+#                     node_features=nf, edge_features=ef, graph=g
+#                 )
 
-            outf = (
-                ckpt(step_fn, fx_t, edge_features, graph, use_reentrant=False)
-                if self.training
-                else step_fn(fx_t, edge_features, graph)
-            )
+#             outf = (
+#                 ckpt(step_fn, fx_t, edge_features, graph, use_reentrant=False)
+#                 if self.training
+#                 else step_fn(fx_t, edge_features, graph)
+#             )
 
-            acc = (
-                outf * data_stats["node"]["norm_acc_std"]
-                + data_stats["node"]["norm_acc_mean"]
-            )
+#             acc = (
+#                 outf * data_stats["node"]["norm_acc_std"]
+#                 + data_stats["node"]["norm_acc_mean"]
+#             )
 
-            vel = self.dt * acc + vel
-            y_t2 = self.dt * vel + y_t1
+#             vel = self.dt * acc + vel
+#             y_t2 = self.dt * vel + y_t1
 
-            outputs.append(y_t2)
-            y_t1, y_t0 = y_t2, y_t1
+#             outputs.append(y_t2)
+#             y_t1, y_t0 = y_t2, y_t1
 
-        return torch.stack(outputs, dim=0)
+#         return torch.stack(outputs, dim=0)
 
 
-class MeshGraphNetTimeConditionalRollout(MeshGraphNet):
-    """MeshGraphNet with time-conditional rollout."""
+# class MeshGraphNetTimeConditionalRollout(MeshGraphNet):
+#     """MeshGraphNet with time-conditional rollout."""
 
-    def __init__(self, *args, **kwargs):
-        self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
-        super().__init__(*args, **kwargs)
+#     def __init__(self, *args, **kwargs):
+#         self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
+#         super().__init__(*args, **kwargs)
 
-    def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
-        """
-        Args:
-            Sample: SimSample containing node_features and node_target
-            data_stats: dict containing normalization stats
-        Returns:
-            [T, N, 3] rollout of predicted positions
-        """
-        inputs = sample.node_features
-        x = inputs["coords"]  # [N,3]
-        features = inputs.get("features", x.new_zeros((x.size(0), 0)))  # [N,F]
-        edge_features = sample.graph.edge_attr
-        graph = sample.graph
+#     def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
+#         """
+#         Args:
+#             Sample: SimSample containing node_features and node_target
+#             data_stats: dict containing normalization stats
+#         Returns:
+#             [T, N, 3] rollout of predicted positions
+#         """
+#         inputs = sample.node_features
+#         x = inputs["coords"]  # [N,3]
+#         features = inputs.get("features", x.new_zeros((x.size(0), 0)))  # [N,F]
+#         edge_features = sample.graph.edge_attr
+#         graph = sample.graph
 
-        outputs: list[torch.Tensor] = []
-        time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
+#         outputs: list[torch.Tensor] = []
+#         time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
 
-        for time in time_seq:
-            fx_t = torch.cat([x, features, time.expand(x.size(0), 1)], dim=-1)
+#         for time in time_seq:
+#             fx_t = torch.cat([x, features, time.expand(x.size(0), 1)], dim=-1)
 
-            def step_fn(nf, ef, g):
-                return super(MeshGraphNetTimeConditionalRollout, self).forward(
-                    node_features=nf, edge_features=ef, graph=g
-                )
+#             def step_fn(nf, ef, g):
+#                 return super(MeshGraphNetTimeConditionalRollout, self).forward(
+#                     node_features=nf, edge_features=ef, graph=g
+#                 )
 
-            outf = (
-                ckpt(step_fn, fx_t, edge_features, graph, use_reentrant=False)
-                if self.training
-                else step_fn(fx_t, edge_features, graph)
-            )
+#             outf = (
+#                 ckpt(step_fn, fx_t, edge_features, graph, use_reentrant=False)
+#                 if self.training
+#                 else step_fn(fx_t, edge_features, graph)
+#             )
 
-            y_t2 = x + outf
-            outputs.append(y_t2)
+#             y_t2 = x + outf
+#             outputs.append(y_t2)
 
-        return torch.stack(outputs, dim=0)
+#         return torch.stack(outputs, dim=0)
 
 
 class TransolverOneStepRollout(
@@ -335,77 +409,77 @@ class TransolverOneStepRollout(
         return torch.stack(outputs, dim=0)  # [T,N,3]
 
 
-class MeshGraphNetOneStepRollout(MeshGraphNet):
-    """
-    MeshGraphNet with one-step rollout:
-      - Training: teacher forcing (uses GT positions at each step, first step needs backstep)
-      - Inference: autoregressive (uses predictions)
-    """
+# class MeshGraphNetOneStepRollout(MeshGraphNet):
+#     """
+#     MeshGraphNet with one-step rollout:
+#       - Training: teacher forcing (uses GT positions at each step, first step needs backstep)
+#       - Inference: autoregressive (uses predictions)
+#     """
 
-    def __init__(self, *args, **kwargs):
-        self.dt: float = kwargs.pop("dt", 5e-3)
-        self.initial_vel: torch.Tensor = kwargs.pop("initial_vel")
-        self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
-        super().__init__(*args, **kwargs)
+#     def __init__(self, *args, **kwargs):
+#         self.dt: float = kwargs.pop("dt", 5e-3)
+#         self.initial_vel: torch.Tensor = kwargs.pop("initial_vel")
+#         self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
+#         super().__init__(*args, **kwargs)
 
-    def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
-        inputs = sample.node_features
-        coords0 = inputs["coords"]  # [N,3]
-        features = inputs.get(
-            "features", coords0.new_zeros((coords0.size(0), 0))
-        )  # [N,F]
-        edge_features = sample.graph.edge_attr
-        graph = sample.graph
+#     def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
+#         inputs = sample.node_features
+#         coords0 = inputs["coords"]  # [N,3]
+#         features = inputs.get(
+#             "features", coords0.new_zeros((coords0.size(0), 0))
+#         )  # [N,F]
+#         edge_features = sample.graph.edge_attr
+#         graph = sample.graph
 
-        # Full ground truth trajectory [T,N,3]
-        N = coords0.size(0)
-        gt_seq = torch.cat(
-            [coords0.unsqueeze(0), sample.node_target.view(N, -1, 3).transpose(0, 1)],
-            dim=0,
-        )
+#         # Full ground truth trajectory [T,N,3]
+#         N = coords0.size(0)
+#         gt_seq = torch.cat(
+#             [coords0.unsqueeze(0), sample.node_target.view(N, -1, 3).transpose(0, 1)],
+#             dim=0,
+#         )
 
-        outputs: list[torch.Tensor] = []
+#         outputs: list[torch.Tensor] = []
 
-        # First step: construct backstep
-        y_t0 = gt_seq[0] - self.initial_vel * self.dt
-        y_t1 = gt_seq[0]
+#         # First step: construct backstep
+#         y_t0 = gt_seq[0] - self.initial_vel * self.dt
+#         y_t1 = gt_seq[0]
 
-        for t in range(self.rollout_steps):
-            if self.training and t > 0:
-                # Teacher forcing: use GT sequence
-                y_t0, y_t1 = gt_seq[t - 1], gt_seq[t]
+#         for t in range(self.rollout_steps):
+#             if self.training and t > 0:
+#                 # Teacher forcing: use GT sequence
+#                 y_t0, y_t1 = gt_seq[t - 1], gt_seq[t]
 
-            vel = (y_t1 - y_t0) / self.dt
-            vel_norm = (vel - data_stats["node"]["norm_vel_mean"]) / (
-                data_stats["node"]["norm_vel_std"] + EPS
-            )
+#             vel = (y_t1 - y_t0) / self.dt
+#             vel_norm = (vel - data_stats["node"]["norm_vel_mean"]) / (
+#                 data_stats["node"]["norm_vel_std"] + EPS
+#             )
 
-            fx_t = torch.cat([y_t1, vel_norm, features], dim=-1)
+#             fx_t = torch.cat([y_t1, vel_norm, features], dim=-1)
 
-            def step_fn(nf, ef, g):
-                return super(MeshGraphNetOneStepRollout, self).forward(
-                    node_features=nf, edge_features=ef, graph=g
-                )
+#             def step_fn(nf, ef, g):
+#                 return super(MeshGraphNetOneStepRollout, self).forward(
+#                     node_features=nf, edge_features=ef, graph=g
+#                 )
 
-            if self.training:
-                outf = ckpt(step_fn, fx_t, edge_features, graph, use_reentrant=False)
-            else:
-                outf = step_fn(fx_t, edge_features, graph)
+#             if self.training:
+#                 outf = ckpt(step_fn, fx_t, edge_features, graph, use_reentrant=False)
+#             else:
+#                 outf = step_fn(fx_t, edge_features, graph)
 
-            acc = (
-                outf * data_stats["node"]["norm_acc_std"]
-                + data_stats["node"]["norm_acc_mean"]
-            )
-            vel_pred = self.dt * acc + vel
-            y_t2_pred = self.dt * vel_pred + y_t1
+#             acc = (
+#                 outf * data_stats["node"]["norm_acc_std"]
+#                 + data_stats["node"]["norm_acc_mean"]
+#             )
+#             vel_pred = self.dt * acc + vel
+#             y_t2_pred = self.dt * vel_pred + y_t1
 
-            outputs.append(y_t2_pred)
+#             outputs.append(y_t2_pred)
 
-            if not self.training:
-                # Autoregressive update
-                y_t0, y_t1 = y_t1, y_t2_pred
+#             if not self.training:
+#                 # Autoregressive update
+#                 y_t0, y_t1 = y_t1, y_t2_pred
 
-        return torch.stack(outputs, dim=0)  # [T,N,3]
+#         return torch.stack(outputs, dim=0)  # [T,N,3]
 
 
 class FIGConvUNetTimeConditionalRollout(FIGConvUNet):

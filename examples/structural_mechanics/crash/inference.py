@@ -155,7 +155,7 @@ class InferenceWorker:
             num_steps=self.cfg.training.num_time_steps,
             num_samples=1,
             logger=self.logger,
-            data_dir=run_path,  # IMPORTANT: dataset reads from the tmpdir with single run
+            data_dir=run_path,
         )
 
         # Data stats for de/normalization

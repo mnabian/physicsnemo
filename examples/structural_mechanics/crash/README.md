@@ -287,7 +287,8 @@ datapipe:
 
 | File | Dataset | Model | Notes |
 |------|---------|-------|-------|
-| `bumper_geotransolver.yaml` | Bumper beam (VTP) | GeoTransolver autoregressive | Predicts positions + strain + stress |
+| `bumper_geotransolver.yaml` | Bumper beam (VTP) | GeoTransolver autoregressive | Predicts positions + strain + stress; uses global features (velocity, thickness scale, wall position) |
+| `car_crash_transolver.yaml` | Car body-in-white crash (VTP) | Transolver autoregressive | Position-only targets; node feature: thickness; no global features |
 
 ### Adding a new experiment
 

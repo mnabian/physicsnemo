@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Car body-in-white crash experiment using Transolver (autoregressive rollout).
+# Matches the dataset and model configuration from the main PhysicsNeMo repo.
+# Usage: python train.py +experiment=car_crash_transolver
+#
+# To switch model (same dataset, different model):
+#   python train.py +experiment=car_crash_transolver \
+#       'defaults=[{override /model: transolver_time_conditional}]'
+#
+# @package _global_
+
+defaults:
+  - override /reader: vtp
+  - override /datapipe: point_cloud
+  - override /model: transolver_autoregressive_rollout_training
+
+# ┌───────────────────────────────────────────┐
+# │                   Data                    │
+# └───────────────────────────────────────────┘
+
+training:
+  raw_data_dir: "/code/datasets/gm_crash/train"
+  raw_data_dir_validation: "/code/datasets/gm_crash/validation"
+  global_features_filepath: null  # no per-run global scalars for this dataset
+
+  # ┌───────────────────────────────────────────┐
+  # │                 Dataset                   │
+  # └───────────────────────────────────────────┘
+
+  num_time_steps: 14
+  num_training_samples: 8
+  num_validation_samples: 8
+
+inference:
+  raw_data_dir_test: "/code/datasets/gm_crash/test"
+
+# ┌───────────────────────────────────────────┐
+# │            Datapipe features              │
+# └───────────────────────────────────────────┘
+
+datapipe:
+  static_features:
+    - thickness     # per-node thickness read from the VTP/d3plot files
+  dynamic_targets: []   # position-only targets; no extra per-node time series
+  global_features: null

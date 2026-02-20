@@ -329,6 +329,73 @@ For completeness, the datapipe also records a lightweight name-to-column map cal
 
 - Transolver specifics: for unstructured data, the embedding tensor is required; in this pipeline it is the current positions over the rollout. If you set `features: []`, the functional input still includes velocity (and optionally time), so the overall functional dimension remains > 0.
 
+### Global features
+
+Global features are per-run scalar values (e.g., impact velocity, thickness scale factor, wall position) that do not vary across mesh nodes. They are passed to the model as a single global conditioning vector and are distinct from the per-node `features` described above.
+
+#### JSON file format
+
+Global features are stored in a single JSON file shared across all splits (train, validation, test). The file is a flat dictionary keyed by **run ID**, where each value is a dictionary of `{feature_name: scalar_float}`:
+
+```json
+{
+  "Run100": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "Run101": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  ...
+}
+```
+
+**Run ID convention:** the run ID must match the **filename stem** of the corresponding data file. For the VTP reader, a file named `Run100.vtp` maps to run ID `"Run100"`. For the d3plot reader, a folder named `Run100/` maps to run ID `"Run100"`. All values must be Python-serializable floats (or ints, which are cast to float).
+
+#### Configuration
+
+Point to the JSON file and declare which keys to use in your experiment config:
+
+```yaml
+# conf/experiment/my_experiment.yaml
+training:
+  global_features_filepath: "/path/to/global_features.json"
+
+datapipe:
+  global_features:       # subset of keys to extract; order defines the global vector
+    - velocity_x
+    - thickness_scale
+    - rwall_origin_y
+```
+
+Every run in the dataset must have **all listed keys** present in the JSON; a missing key raises a `KeyError` at dataset construction time. Keys present in the JSON but not listed in `global_features` are silently ignored, so you can store extra metadata in the file without affecting training.
+
+To disable global features entirely, omit `global_features_filepath` (or leave it `null`) and set `global_features: null` in the datapipe block.
+
+#### How the datapipe and model consume global features
+
+At `__getitem__` time, the datapipe converts the selected scalars to a dict of scalar tensors and attaches them to the `SimSample`:
+
+```python
+sample.global_features = {
+    "velocity_x":      tensor(-5.0),
+    "thickness_scale": tensor(1.0),
+    "rwall_origin_y":  tensor(0.0),
+}
+```
+
+In the model forward pass, these are stacked into a single global embedding vector and passed to the network. The **`global_dim`** parameter in the model config must equal the number of global features selected:
+
+```yaml
+# conf/model/geotransolver_autoregressive_rollout_training.yaml
+global_dim: 3   # must match len(datapipe.global_features)
+```
+
+If `global_features` is `null`, `sample.global_features` is `None` and the model must handle this case (currently only `GeoTransolverAutoregressiveRolloutTraining` uses global features; other models ignore them).
+
 ## Reader: built-in d3plot and vtp readers and how to add your own
 
 The reader is the component that actually opens the raw simulation outputs and produces the arrays the datapipe consumes. It is intentionally thin and swappable via Hydra so you can adapt the pipeline to LS‑DYNA exports, Abaqus exports, or your own internal formats without touching the rest of the code.

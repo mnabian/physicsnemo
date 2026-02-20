@@ -16,20 +16,20 @@
 
 # ┌───────────────────────────────────────────┐
 # │                   Data                    │
-# └───────────────────────────────────────────┘  
+# └───────────────────────────────────────────┘
 
-raw_data_dir:  "/code/mnabian/workspace/bumper/physicsnemo-curator/examples/structural_mechanics/crash/data/train"  # TODO change
-raw_data_dir_validation:  "/code/mnabian/workspace/bumper/physicsnemo-curator/examples/structural_mechanics/crash/data/validation"
-global_features_filepath:  "/code/datasets/bumper_crush/global_features.json"
-max_workers_preprocessing: 64  # Maximum parallel workers
+raw_data_dir: ???               # Required: set via experiment config
+raw_data_dir_validation: ???    # Required: set via experiment config
+global_features_filepath: null  # Optional: path to global features JSON
+max_workers_preprocessing: 64   # Maximum parallel workers
 
 # ┌───────────────────────────────────────────┐
 # │                 Training                  │
-# └───────────────────────────────────────────┘  
+# └───────────────────────────────────────────┘
 
-num_time_steps: 51
-num_training_samples: 121
-num_validation_samples: 14
+num_time_steps: ???             # Required: set via experiment config
+num_training_samples: ???       # Required: set via experiment config
+num_validation_samples: 0       # 0 disables validation; override per experiment
 start_lr: 0.0001
 end_lr: 0.0000003
 epochs: 10000

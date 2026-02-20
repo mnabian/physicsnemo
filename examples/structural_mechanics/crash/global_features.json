@@ -1,0 +1,677 @@
+{
+  "run1": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run2": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run3": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run4": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run5": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run6": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run7": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run8": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run9": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run10": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run11": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run12": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run13": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run14": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run15": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run16": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run17": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run18": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run19": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run20": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run21": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run22": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run23": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run24": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run25": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run26": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run27": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run28": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run29": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run30": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run31": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run32": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run33": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run34": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run35": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run36": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run37": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run38": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run39": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run40": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run41": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run42": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run43": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run44": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run45": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run46": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run47": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run48": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run49": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run50": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run51": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run52": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run53": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run54": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run55": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run56": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run57": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run58": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run59": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run60": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run61": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run62": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run63": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run64": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run65": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run66": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run67": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run68": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run69": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run70": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run71": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run72": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run73": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run74": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run75": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run76": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run77": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run78": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run79": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run80": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run81": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run82": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run83": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run84": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run85": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run86": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run87": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run88": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run89": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run90": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run91": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run92": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run93": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run94": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run95": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run96": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run97": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run98": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run99": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run100": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run101": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run102": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run103": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run104": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run105": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run106": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run107": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run108": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run109": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run110": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run111": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run112": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run113": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run114": {
+    "velocity_x": -5.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run115": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run116": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run117": {
+    "velocity_x": -5.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run118": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run119": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run120": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run121": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run122": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run123": {
+    "velocity_x": -3.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run124": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run125": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run126": {
+    "velocity_x": -3.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  },
+  "run127": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 0.0
+  },
+  "run128": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 120.0
+  },
+  "run129": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.0,
+    "rwall_origin_y": 240.0
+  },
+  "run130": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 0.0
+  },
+  "run131": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 120.0
+  },
+  "run132": {
+    "velocity_x": -7.0,
+    "thickness_scale": 0.7,
+    "rwall_origin_y": 240.0
+  },
+  "run133": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 0.0
+  },
+  "run134": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 120.0
+  },
+  "run135": {
+    "velocity_x": -7.0,
+    "thickness_scale": 1.3,
+    "rwall_origin_y": 240.0
+  }
+}

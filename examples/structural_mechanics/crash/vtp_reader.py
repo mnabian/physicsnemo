@@ -114,6 +114,28 @@ def load_vtp_file(vtp_path):
         if not name.startswith("displacement_"):
             point_data_dict[name] = np.asarray(poly.point_data[name])
 
+    # Extract cell data and convert to point data
+    if poly.cell_data:
+        converted = poly.cell_data_to_point_data(pass_cell_data=True)
+        cell_point_names = [
+            name
+            for name in converted.point_data.keys()
+            if name.startswith("cell_effective_plastic_strain_")
+            or name.startswith("cell_stress_vm_")
+        ]
+        if cell_point_names:
+            def natural_key(name):
+                return [
+                    int(s) if s.isdigit() else s.lower()
+                    for s in re.findall(r"\d+|\D+", name)
+                ]
+            cell_point_names = sorted(cell_point_names, key=natural_key)
+            for name in cell_point_names:
+                arr = np.asarray(converted.point_data[name])
+                # Drop the 'cell_' prefix to reflect point semantics
+                point_name = name.replace("cell_", "", 1)
+                point_data_dict[point_name] = arr
+
     return pos_raw, mesh_connectivity, point_data_dict
 
 

@@ -16,4 +16,4 @@
 
 output_dir_pred: "./predicted_vtps"
 output_dir_exact: "./exact_vtps"
-raw_data_dir_test: "/code/mnabian/workspace/bumper/physicsnemo-curator/examples/structural_mechanics/crash/data/test"
+raw_data_dir_test: ???          # Required: set via experiment config

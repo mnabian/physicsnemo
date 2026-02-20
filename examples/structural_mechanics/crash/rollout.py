@@ -47,7 +47,8 @@ class GeoTransolverAutoregressiveRolloutTraining(GeoTransolver):
             sample: SimSample containing node_features and node_target
             data_stats: dict containing normalization stats
         Returns:
-            [T, N, 3] rollout of predicted positions
+            pred: [N, (T-1)*Fo] where Fo = 3 + sum(C_k), interleaved per timestep
+                  Layout: [dx_t1, dy_t1, dz_t1, eps_t1, vm_t1, dx_t2, ...]
         """
         inputs = sample.node_features
         coords = inputs["coords"]  # [N,3]
@@ -55,49 +56,55 @@ class GeoTransolverAutoregressiveRolloutTraining(GeoTransolver):
         initial_vel = sample.global_features["velocity_x"].item()  # TODO mnabian needs better handling for unification
         global_features = torch.stack([sample.global_features[k] for k in sample.global_features.keys()], dim=0)
         N = coords.size(0)
-        device = coords.device
+        T = self.rollout_steps
 
-        # Initial states
-        y_t1 = coords  # [N,3]
-        y_t0 = y_t1 - initial_vel * self.dt  # backstep using initial velocity
-
-        outputs: list[torch.Tensor] = []
-        for t in range(self.rollout_steps):
-            # Velocity normalization
-            vel = (y_t1 - y_t0) / self.dt
-            vel_norm = (vel - data_stats["node"]["norm_vel_mean"]) / (
-                data_stats["node"]["norm_vel_std"] + EPS
+        def step_fn(fx, embedding, global_embedding):
+            return super(GeoTransolverAutoregressiveRolloutTraining, self).forward(
+                local_embedding=fx, geometry=embedding, local_positions=embedding, global_embedding=global_embedding
             )
 
-            # Model input
-            fx_t = torch.cat(
-                [vel_norm, y_t1, features], dim=-1
-            )  # [N, 3+3+F]
+        fx_t = torch.cat([coords, features], dim=-1)
 
-            def step_fn(fx, embedding, global_embedding):
-                return super(GeoTransolverAutoregressiveRolloutTraining, self).forward(
-                    local_embedding=fx, geometry=embedding, local_positions=embedding, global_embedding=global_embedding
-                )
+        pred_flat = step_fn(
+            fx_t.unsqueeze(0), coords.unsqueeze(0), global_features.unsqueeze(0).unsqueeze(0)
+        ).squeeze(0)  # [N, P]
 
-            if self.training:
-                outf = ckpt(
-                    step_fn, fx_t.unsqueeze(0), y_t1.unsqueeze(0), global_features.unsqueeze(0).unsqueeze(0), use_reentrant=False
-                ).squeeze(0)
-            else:
-                outf = step_fn(fx_t.unsqueeze(0), y_t1.unsqueeze(0), global_features.unsqueeze(0).unsqueeze(0)).squeeze(0)
-
-            # De-normalize acceleration
-            acc = (
-                outf * data_stats["node"]["norm_acc_std"]
-                + data_stats["node"]["norm_acc_mean"]
+        # Extract position deltas: first T*3 dims -> [N, T, 3]
+        base_pos_dim = T * 3
+        if pred_flat.shape[-1] < base_pos_dim:
+            raise ValueError(
+                f"Model output dim {pred_flat.shape[-1]} smaller than required position dim {base_pos_dim}"
             )
-            vel = self.dt * acc + vel
-            y_t2 = self.dt * vel + y_t1
+        pos_pred = pred_flat[:, :base_pos_dim].view(N, T, 3)  # [N, T, 3]
 
-            outputs.append(y_t2)
-            y_t1, y_t0 = y_t2, y_t1
+        # Extract dynamic target series and build per-timestep interleaved output
+        per_t_parts = [pos_pred]  # Start with positions [N, T, 3]
+        idx = base_pos_dim
+        
+        if getattr(sample, "target_series", None):
+            # Preserve stable ordering (sorted keys)
+            for name in sorted(sample.target_series.keys()):
+                tgt = sample.target_series[name]  # [T, N] or [T, N, C]
+                if tgt.ndim == 2:
+                    C = 1
+                else:
+                    C = tgt.shape[-1]
+                need = T * C
+                if idx + need > pred_flat.shape[-1]:
+                    raise ValueError(
+                        f"Model output dim {pred_flat.shape[-1]} insufficient for target '{name}' requiring {need} dims at idx {idx}"
+                    )
+                sl = pred_flat[:, idx : idx + need].view(N, T, C)  # [N, T, C]
+                per_t_parts.append(sl)
+                idx += need
 
-        return torch.stack(outputs, dim=0)  # [T,N,3]
+        # Concatenate along feature dim per timestep: [N, T, Fo]
+        pred_per_t = torch.cat(per_t_parts, dim=-1)  # [N, T, Fo] where Fo = 3 + sum(C_k)
+        
+        # Flatten to [N, T*Fo] with interleaved layout
+        pred_interleaved = pred_per_t.flatten(start_dim=1)  # [N, T*Fo]
+        
+        return pred_interleaved
 
 
 class TransolverAutoregressiveRolloutTraining(Transolver):

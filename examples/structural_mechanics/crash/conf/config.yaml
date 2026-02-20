@@ -25,9 +25,10 @@ experiment_desc: "unified training recipe for crash models"
 run_desc: "unified training recipe for crash models"
 
 defaults:
-  - reader: vtp # Options are: vtp, d3plot, zarr
-  - datapipe: point_cloud   # will be overridden by model configs
+  - reader: vtp             # Options are: vtp, d3plot, zarr
+  - datapipe: point_cloud   # will be overridden by experiment configs
   - model: geotransolver_autoregressive_rollout_training
   - training: default
   - inference: default
+  - experiment: null        # Override with: +experiment=<name>
   - _self_

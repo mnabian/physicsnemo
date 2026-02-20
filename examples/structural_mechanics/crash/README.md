@@ -11,99 +11,66 @@ Machine Learning (ML) surrogates provide a promising alternative by learning map
 - **Scalability** to large structural models without rerunning costly FE simulations.
 - **Flexibility** in experimenting with different model architectures (GNNs, Transformers).
 
-In this example, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports Transolver and MeshGraphNet architectures with multiple rollout schemes. It supports multiple dataset formats including d3plot and VTP. The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes.
+In this example, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, FIGConvUNet, and MeshGraphNet architectures with multiple rollout schemes. It supports multiple dataset formats including d3plot, VTP, and Zarr. The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
 
 For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201).
+
+### Bumper Beam modeling
+
+<p align="center">
+  <img src="../../../docs/img/crash/bumper_beam.gif" alt="Bumper beam animation" width="60%" />
+
+</p>
 
 ### Body-in-White Crash Modeling
 
 <p align="center">
-  <img src="../../../docs/img/crash/crash_case4_reduced.gif" alt="Crash animation" width="80%" />
+  <img src="../../../docs/img/crash/crash_case4_reduced.gif" alt="Crash animation" width="60%" />
 
 </p>
 
 ### Crushcan Modeling
 
 <p align="center">
-  <img src="../../../docs/img/crash/crushcan.gif" alt="Crushcan animation" width="80%" />
+  <img src="../../../docs/img/crash/crushcan.gif" alt="Crushcan animation" width="60%" />
 
 </p>
 
 ## Quickstart
 
-1) Select your recipe (reader, datapipe, model) in `conf/config.yaml`.
+This pipeline uses **Hydra experiment configs** to manage different datasets, models, and feature sets from a single codebase. All experiment-specific settings (data paths, model choice, dataset size, feature lists) live in one file under `conf/experiment/`.
 
-```yaml
-# conf/config.yaml
-defaults:
-  - reader: vtp                  # vtp, zarr, d3plot, or your custom reader
-  - datapipe: point_cloud        # or graph
-  - model: transolver_time_conditional   # or an MGN variant
-  - training: default
-  - inference: default
-  - _self_
+1) Pick or create an experiment config under `conf/experiment/`. A ready-to-use config for the bumper beam dataset is provided:
+
+```
+conf/experiment/bumper_geotransolver.yaml
 ```
 
-2) Point to your datasets and core training knobs.
+2) Preprocess your data (see [Data Preprocessing](#data-preprocessing) below).
 
-- `conf/training/default.yaml`:
-  - `raw_data_dir`: path to TRAIN runs (folder of run folders for d3plot, folder of .vtp files for VTP, or folder of .zarr stores for Zarr)
-  - `num_time_steps`: number of frames to use per run
-  - `num_training_samples`: how many runs to load
-
-```yaml
-# conf/training/default.yaml
-raw_data_dir: "/path/to/train"   # REQUIRED: change this
-num_time_steps: 14                 # adjust to your data
-num_training_samples: 8            # adjust to available runs
-```
-
-- `conf/inference/default.yaml`:
-  - `raw_data_dir_test`: path to TEST runs
-  - `output_dir_pred`/`output_dir_exact`: where to write predicted/exact VTPs
-
-```yaml
-# conf/inference/default.yaml
-raw_data_dir_test: "/path/to/test"   # REQUIRED: change this
-```
-
-3) Configure the datapipe features list (order matters and defines columns of `x['features']`).
-
-```yaml
-# conf/datapipe/point_cloud.yaml (same keys for graph.yaml)
-features: [thickness]   # or [] for no features; preserve order if adding more
-```
-
-4) Reader‑specific options (optional).
-
-- d3plot: `conf/reader/d3plot.yaml` → `wall_node_disp_threshold`
-- VTP and Zarr readers have no additional options (they read pre-processed data)
-
-5) Model config: ensure input dimensions match your features.
-
-- Transolver (time‑conditional): set `functional_dim = len(features)` and `embedding_dim = 3`;
-
-```yaml
-# conf/model/transolver_time_conditional.yaml
-functional_dim: 1    # e.g., 1 if features: [thickness]
-embedding_dim: 3
-time_input: true
-```
-
-6) Launch training.
+3) Launch training, passing the experiment name:
 
 ```bash
-python train.py                              # single GPU
-torchrun --standalone --nproc_per_node=4 train.py   # multi-GPU (DDP)
+# Single GPU
+python train.py +experiment=bumper_geotransolver
+
+# Multi-GPU (DDP)
+torchrun --standalone --nproc_per_node=4 train.py +experiment=bumper_geotransolver
 ```
 
-7) Run inference.
+4) Run inference with the same experiment:
 
 ```bash
-python inference.py
+python inference.py +experiment=bumper_geotransolver
 ```
 
 Outputs: predictions are saved under `output_dir_pred` (default `./predicted_vtps/`). Normalization stats are written to `./stats/` during training and reused for inference.
+
+You can override any individual config value on the command line without editing any file:
+
+```bash
+python train.py +experiment=bumper_geotransolver training.epochs=500 training.start_lr=1e-3
+```
 
 ## Prerequisites
 
@@ -221,54 +188,114 @@ This format is directly compatible with the Zarr reader in this example.
 
 ## Training
 
-Training is managed via Hydra configurations located in conf/.
-The main script is train.py.
+Training is managed via Hydra configurations located in `conf/`.
+The main script is `train.py`.
 
-Config Structure
+### Config Structure
 
-```bash
+```
 conf/
-├── config.yaml              # master config (sets datapipe, model, training)
-├── datapipe/                # dataset configs
+├── config.yaml                  # master config; sets base defaults
+├── experiment/                  # ← one file per experiment
+│   └── bumper_geotransolver.yaml
+├── datapipe/                    # dataset configs (generic defaults)
 │   ├── graph.yaml
 │   └── point_cloud.yaml
-├── model/                   # model configs
-│   ├── mgn_autoregressive_rollout_training.yaml
-│   ├── mgn_one_step_rollout.yaml
-│   ├── mgn_time_conditional.yaml
+├── model/                       # model configs
+│   ├── geotransolver_autoregressive_rollout_training.yaml
 │   ├── transolver_autoregressive_rollout_training.yaml
 │   ├── transolver_one_step_rollout.yaml
 │   ├── transolver_time_conditional.yaml
 │   ├── figconvunet_autoregressive_rollout_training.yaml
 │   ├── figconvunet_one_step_rollout.yaml
-│   └── figconvunet_time_conditional.yaml
-├── training/default.yaml    # training hyperparameters
-└── inference/default.yaml   # inference options
+│   ├── figconvunet_time_conditional.yaml
+│   ├── mgn_autoregressive_rollout_training.yaml
+│   ├── mgn_one_step_rollout.yaml
+│   └── mgn_time_conditional.yaml
+├── reader/                      # reader configs
+│   ├── vtp.yaml
+│   ├── zarr.yaml
+│   └── d3plot.yaml
+├── training/default.yaml        # generic training hyperparameters
+└── inference/default.yaml       # generic inference options
 ```
 
-Launch Training
+Experiment configs use `# @package _global_` and the `defaults` override mechanism to select the reader, datapipe, and model, and to supply all required fields (`raw_data_dir`, `num_time_steps`, etc.) that are left as `???` (required) in the base configs.
+
+### Launch Training
+
 Single GPU:
 
 ```bash
-python train.py
+python train.py +experiment=bumper_geotransolver
 ```
 
 Multi-GPU (Distributed Data Parallel):
 
 ```bash
-torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py
+torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py +experiment=bumper_geotransolver
 ```
 
 ## Inference
 
-Use inference.py to evaluate trained models on test crash runs.
+Use `inference.py` to evaluate trained models on test crash runs.
 
 ```bash
-python inference.py
+python inference.py +experiment=bumper_geotransolver
 ```
 
 Predicted meshes are written as .vtp files under
 ./predicted_vtps/, and can be opened using ParaView.
+
+## Experiments
+
+Each experiment is a single YAML file in `conf/experiment/` that captures everything specific to one dataset/model combination. It overrides the generic base configs without touching them.
+
+### Anatomy of an experiment config
+
+```yaml
+# conf/experiment/my_experiment.yaml
+# @package _global_
+
+defaults:
+  - override /reader: vtp                 # reader choice
+  - override /datapipe: point_cloud       # datapipe choice
+  - override /model: geotransolver_autoregressive_rollout_training  # model choice
+
+training:
+  raw_data_dir: "/path/to/train"
+  raw_data_dir_validation: "/path/to/validation"
+  global_features_filepath: "/path/to/global_features.json"  # or omit for null
+  num_time_steps: 51
+  num_training_samples: 121
+  num_validation_samples: 5
+
+inference:
+  raw_data_dir_test: "/path/to/test"
+
+datapipe:
+  dynamic_targets:             # per-node time-series targets (e.g. strain, stress)
+    - effective_plastic_strain
+    - stress_vm
+  global_features:             # per-run scalar features (loaded from JSON)
+    - velocity_x
+    - thickness_scale
+    - rwall_origin_y
+```
+
+### Provided experiments
+
+| File | Dataset | Model | Notes |
+|------|---------|-------|-------|
+| `bumper_geotransolver.yaml` | Bumper beam (VTP) | GeoTransolver autoregressive | Predicts positions + strain + stress |
+
+### Adding a new experiment
+
+1. Create `conf/experiment/<my_experiment>.yaml` following the template above.
+2. Adjust `override /reader`, `override /model`, `override /datapipe` to select the right components.
+3. Set all required fields: `raw_data_dir`, `raw_data_dir_validation`, `raw_data_dir_test`, `num_time_steps`, `num_training_samples`.
+4. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it via `override /model`.
+5. Run: `python train.py +experiment=<my_experiment>`
 
 ## Datapipe: how inputs are constructed and normalized
 
@@ -333,21 +360,23 @@ Example Hydra configuration for the VTP reader:
 _target_: vtp_reader.Reader
 ```
 
-Select it in `conf/config.yaml`:
+Select it from your experiment config:
 
 ```yaml
+# conf/experiment/my_experiment.yaml
 defaults:
-  - datapipe: point_cloud
-  - model: transolver_time_conditional
-  - training: default
-  - inference: default
-  - reader: vtp
+  - override /reader: vtp
+  - override /datapipe: point_cloud
+  - override /model: transolver_time_conditional
+  ...
 ```
 
-And configure features in `conf/datapipe/point_cloud.yaml` or `conf/datapipe/graph.yaml`:
+And configure features in the experiment's `datapipe` block:
 
 ```yaml
-features: [thickness]  # or [] for no features
+# conf/experiment/my_experiment.yaml
+datapipe:
+  static_features: [thickness]  # or [] for no features
 ```
 
 ### Built‑in Zarr reader
@@ -373,22 +402,23 @@ Example Hydra configuration for the Zarr reader:
 _target_: zarr_reader.Reader
 ```
 
-Select it in `conf/config.yaml`:
+Select it from your experiment config:
 
 ```yaml
+# conf/experiment/my_experiment.yaml
 defaults:
-  - reader: zarr # Options are: vtp, d3plot, zarr
-  - datapipe: point_cloud   # will be overridden by model configs
-  - model: transolver_autoregressive_rollout_training
-  - training: default
-  - inference: default
-  - _self_
+  - override /reader: zarr
+  - override /datapipe: point_cloud
+  - override /model: transolver_autoregressive_rollout_training
+  ...
 ```
 
-And configure features in `conf/datapipe/graph.yaml`:
+And configure features in the experiment's `datapipe` block:
 
 ```yaml
-features: [thickness]  # Must match fields stored in Zarr
+# conf/experiment/my_experiment.yaml
+datapipe:
+  static_features: [thickness]  # Must match fields stored in Zarr
 ```
 
 **Recommended workflow:**
@@ -422,7 +452,7 @@ _target_: my_reader.MyReader
 # any constructor kwargs here, e.g. thresholds or unit conversions
 ```
 
-Then, in `conf/config.yaml`, select the reader by adding or overriding `- reader: my_reader` (or `my_reader_fn`). The datapipe will call your reader with `data_dir`, `num_samples`, `split`, and an optional `logger`, and will expect the tuple described above. Provided you populate `'coords'` and the configured feature arrays per run, the rest of the pipeline—normalization, batching, graph construction, and model rollout—will work without code changes.
+Then, in your experiment config, select the reader by adding `- override /reader: my_reader` to the `defaults` block. The datapipe will call your reader with `data_dir`, `num_samples`, `split`, and an optional `logger`, and will expect the tuple described above. Provided you populate `'coords'` and the configured feature arrays per run, the rest of the pipeline—normalization, batching, graph construction, and model rollout—will work without code changes.
 
 A note on reader signatures and future‑proofing: the datapipe currently passes `data_dir`, `num_samples`, `split`, and `logger` when invoking the reader, and may pass additional keys in the future. To stay resilient, implement your reader with optional parameters and a catch‑all `**kwargs`.
 
@@ -500,7 +530,82 @@ run_post_processing.sh can automate all evaluation tasks across runs.
 - For multi-GPU training, use `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`.
 - For DDP, prefer `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`.
 
+## Development tips
+
+### Dynamics prediction
+
+1. **Time-conditional** gives the best accuracy for long-horizon dynamics; prefer it when validation quality matters most.
+2. **One-shot** offers competitive accuracy with much lower training cost; consider it when you need fast iteration or have few state variables to predict.
+3. **AR-rollout** can work well for short-horizon prediction but tends to become unstable when training for longer rollouts.
+4. **Teacher-forcing** yields low training loss but typically generalizes poorly at inference; avoid it for deployment.
+
+
+| Bumper(T=50)      | t/epoch (sec) | Validation MSE | Car crash (T=14)  | t/epoch (sec) | Validation MSE |
+|:------------------|:--------:|:--------:|:------------------|:--------:|:--------:|
+| One-shot          | 1        | 5.42e-3  | One-shot          | 6.4      | 2.32e-4  |
+| Time-conditional  | 29       | 4.12e-3  | Time-conditional  | 40.8     | 2.54e-4  |
+| AR-rollout        | 37       | unstable | AR-rollout        | 61.6     | 2.27e-4  |
+| Teacher-forcing   | 29       | 0.3      |                   |          |          |
+
+<p align="center">
+  <img src="../../../docs/img/crash/Time_integraton_val_loss.png" alt="Time integration validation loss" width="80%" />
+
+</p>
+
+### Models
+
+5. **Accuracy ranking (one-shot):** GeoFlare > GeoTransolver > Transolver > MeshGraphNet. Use GeoFlare when best accuracy is the priority; Transolver when speed is.
+
+**One-shot comparison:**
+
+| Validation MSE    | Bumper(T=50)   | Car crash(T=25)| t/epoch (sec) | 
+|:------------------|:--------:|:--------:|:--------:|
+| Transolver        | 5.75e-3  | 2.67e-3  | 4.8      |
+| GeoTransolver     | 5.43e-3  | 1.94e-3  | 7.5      |
+| GeoFlare          | **4.81e-3**  | **1.45e-3**  | 7.1      |
+
+Car-crash test MSE at probe location (Driver, Passenger):
+
+| Driver   | position   | velocity | acceleration | Passenger   | position   | velocity | acceleration | 
+|:------------------|:--------:|:--------:|:--------:|:------------------|:--------:|:--------:|:--------:|
+| Transolver        | 2.21e-3  | 8.21e-1  | 5.60e+3  | Transolver        | 2.43e-3  | 9.31e-1  | 6.81e+3  |
+| GeoTransolver     | 1.51e-3  | 5.74e-1  | 3.99e+3  | GeoTransolver     | 1.92e-3  | 7.03e-1  | 5.53e+3  |
+| GeoFlare          | **1.01e-3**  | **4.38e-1**  | **2.99e+3**  | GeoFlare          | **1.19e-3**  | **5.16e-1**  | **3.93e+3**  |
+
+
+
+### Optimizer
+
+6. **Muon** generally outperforms Adam on validation MSE but can overfit; monitor validation loss and consider early stopping or regularization.
+
+**Car crash (Muon vs Adam):**
+
+| Validation MSE    | Adam     | Muon     | 
+|:------------------|:--------:|:--------:|
+| Transolver        | 2.67e-3  | **2.46e-3**  |
+| GeoTransolver     | 1.94e-3  | **1.19e-3**  |
+| GeoFlare          | 1.45e-3  | **1.30e-3**  |
+
+
+Car-crash test MSE at probe location (Driver, Passenger):
+
+| Driver   | position   | velocity | acceleration | Passenger   | position   | velocity | acceleration | 
+|:------------------|:--------:|:--------:|:--------:|:------------------|:--------:|:--------:|:--------:|
+| Transolver        | 2.63e-3  | 8.41e-1  | 2.14e+3  | Transolver        | 2.21e-3  | 7.25e-1  | 2.24e+3  |
+| GeoTransolver     | 1.84e-3  | 6.09e-1  | 1.71e+3  | GeoTransolver     | 1.72e-3  | 5.53e-1  | 1.80e+3  |
+| GeoFlare          | **7.18e-4**  | **2.71e-1**  | **1.27e+3**  | GeoFlare          | **6.52e-4**  | **2.53e-1**  | **1.45e+3**  |
+
+
+
+<p align="center">
+  <img src="../../../docs/img/crash/Test_MSE_models.png" alt="Time integration validation loss" width="60%" />
+
+</p>
+
 ## Troubleshooting / FAQ
+
+- I want to run without an experiment file.
+  - You can still override required fields directly: `python train.py training.raw_data_dir=/path/to/train training.num_time_steps=51 training.num_training_samples=100 inference.raw_data_dir_test=/path/to/test`. For recurring setups, creating an experiment file is recommended.
 
 - My `.vtp` has no displacement fields.
   - Ensure point_data contains vector arrays named like `displacement_t0.000`, `displacement_t0.005`, ...; the reader falls back to any `displacement_t*` pattern.

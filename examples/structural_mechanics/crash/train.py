@@ -233,19 +233,22 @@ class Trainer:
         with autocast(device_type="cuda", enabled=self.amp):
             T = self.rollout_steps
 
-            # Model forward
+            # Model forward - returns [N, T*Fo] with interleaved features per timestep
             pred = self.model(sample=sample, data_stats=self.data_stats)
 
-            # Reshape target
+            # Target is also [N, T*Fo] with interleaved features per timestep
             target_flat = sample.node_target  # [N, T*Fo]
             N = target_flat.size(0)
-            Fo = 3  # output features per node
-            assert target_flat.size(1) == T * Fo, (
-                f"target dim {target_flat.size(1)} != {T * Fo}"
+            
+            # Compute Fo dynamically from target shape
+            assert target_flat.size(1) % T == 0, (
+                f"Target dim {target_flat.size(1)} not divisible by T={T}"
             )
-            target = target_flat.view(N, T, Fo).transpose(0, 1).contiguous()  # [T,N,Fo]
-
-            return self.criterion(pred, target)
+            Fo = target_flat.size(1) // T  # Features per timestep (3 + sum(C_k))
+            
+            # Both pred and target are already [N, T*Fo] with same interleaved layout
+            # Compute MSE directly without reshape (or reshape both for logging/viz)
+            return self.criterion(pred, target_flat)
 
     def backward(self, loss):
         if self.amp:
@@ -267,18 +270,22 @@ class Trainer:
             sample = sample[0].to(self.dist.device)  # SimSample .to()
             T = self.rollout_steps
 
-            # Model forward
-            pred_seq = self.model(sample=sample, data_stats=self.data_stats)
+            # Model forward - returns [N, T*Fo] with interleaved features per timestep
+            pred_flat = self.model(sample=sample, data_stats=self.data_stats)
 
-            # Exact sequence
-            N = sample.node_target.size(0)
-            Fo = 3  # output features per node
-            assert sample.node_target.size(1) == T * Fo, (
-                f"target dim {sample.node_target.size(1)} != {T * Fo}"
+            # Target is also [N, T*Fo] with interleaved features per timestep
+            target_flat = sample.node_target  # [N, T*Fo]
+            N = target_flat.size(0)
+            
+            # Compute Fo dynamically from target shape
+            assert target_flat.size(1) % T == 0, (
+                f"Target dim {target_flat.size(1)} not divisible by T={T}"
             )
-            exact_seq = (
-                sample.node_target.view(N, T, Fo).transpose(0, 1).contiguous()
-            )  # [T,N,Fo]
+            Fo = target_flat.size(1) // T  # Features per timestep (3 + sum(C_k))
+            
+            # Reshape both to [T, N, Fo] for timestep-wise error computation
+            pred_seq = pred_flat.view(N, T, Fo).transpose(0, 1).contiguous()  # [T,N,Fo]
+            exact_seq = target_flat.view(N, T, Fo).transpose(0, 1).contiguous()  # [T,N,Fo]
 
             # Compute and add error
             SqError = torch.square(pred_seq - exact_seq)

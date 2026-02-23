@@ -146,10 +146,6 @@ class InferenceWorker:
         run_name = os.path.basename(run_path)
         self.logger.info(f"[Rank {self.dist.rank}] Processing run: {run_name}")
 
-        # Create a temporary directory exposing this run as the ONLY child (as your original script did)
-        # with tempfile.TemporaryDirectory() as tmpdir:
-        #     os.symlink(run_path, os.path.join(tmpdir, run_name))
-
         # Instantiate a dataset that sees exactly one run
         reader = instantiate(self.cfg.reader)
         dataset = instantiate(
@@ -160,7 +156,7 @@ class InferenceWorker:
             num_steps=self.cfg.training.num_time_steps,
             num_samples=1,
             logger=self.logger,
-            data_dir=run_path,  # IMPORTANT: dataset reads from the tmpdir with single run
+            data_dir=run_path,
         )
 
         # Data stats for de/normalization

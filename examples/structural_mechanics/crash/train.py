@@ -331,7 +331,7 @@ def main(cfg: DictConfig) -> None:
     logger0 = RankZeroLoggingWrapper(logger, dist)
     logger0.file_logging()
 
-    # Log full config and paths (aligned with transformer_models / other examples)
+    # Log full config and paths
     logger0.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
     logger0.info(f"Output directory: {cfg.training.tensorboard_log_dir}")
     logger0.info(f"Checkpoint directory: {cfg.training.ckpt_path}")
@@ -356,7 +356,7 @@ def main(cfg: DictConfig) -> None:
             total_loss += loss.detach().item()
             num_batches += 1
 
-            # Per-batch progress (aligned with transformer_models verbosity)
+            # Per-batch progress
             if (batch_idx + 1) % log_every == 0 or batch_idx == 0:
                 batch_duration = time.time() - batch_start
                 mem_gb = torch.cuda.memory_reserved() / 1024**3 if torch.cuda.is_available() else 0.0
@@ -405,7 +405,7 @@ def main(cfg: DictConfig) -> None:
         ):
             val_stats = trainer.validate(epoch)
 
-            # Log validation metrics (aligned with transformer_models: table + summary)
+            # Log validation metrics
             mse_val = val_stats["MSE"].item()
             mse_w_time = val_stats["MSE_w_time"]
             logger0.info(f"Validation epoch {epoch + 1}: MSE: {mse_val:.6f}")

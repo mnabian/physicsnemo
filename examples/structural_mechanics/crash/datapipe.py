@@ -20,10 +20,12 @@ import numpy as np
 import torch
 from typing import Any, Callable, Optional
 
-# from torch_geometric.data import Data
-# from torch_geometric.utils import coalesce, add_self_loops
-
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.gnn.utils import load_json, save_json
+
+# Lazy imports for graph datapipe (PyG only loaded when CrashGraphDataset is used)
+_pyg_data = OptionalImport("torch_geometric.data")
+_pyg_utils = OptionalImport("torch_geometric.utils")
 from physicsnemo.utils.logging import PythonLogger
 
 STATS_DIRNAME = "stats"
@@ -51,8 +53,7 @@ class SimSample:
         self,
         node_features: dict[str, torch.Tensor],
         node_target: torch.Tensor,
-        #graph: Optional[Data] = None,
-        graph = None,
+        graph=None,
         global_features: Optional[dict[str, torch.Tensor]] = None,
         target_series: Optional[dict[str, torch.Tensor]] = None,
     ):
@@ -297,7 +298,13 @@ class CrashBaseDataset:
         T, N, _ = self.mesh_pos_seq[idx].shape
         F = self.node_features_data[idx].shape[1]
         Din = 3 + F
-        Dout = (T - 1) * 3
+        Fo = 3  # position dims per timestep
+        if len(self.dynamic_targets) > 0:
+            ts_rec = self.target_series_data[idx]
+            for k in self.dynamic_targets:
+                series = ts_rec[k]
+                Fo += 1 if series.ndim == 2 else series.shape[-1]
+        Dout = (T - 1) * Fo
         return Din, Dout
 
     # Common x/y construction used by both datasets
@@ -347,6 +354,9 @@ class CrashBaseDataset:
         _, Dout = self._xy_shapes(idx)
         assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
             f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
+        )
+        assert y.shape == (N, Dout), (
+            f"target shape {y.shape} does not match expected (N={N}, Dout={Dout})"
         )
         # y now includes dynamic targets interleaved per timestep
         return x, y
@@ -495,130 +505,131 @@ class CrashBaseDataset:
         return arr
 
 
-# class CrashGraphDataset(CrashBaseDataset):
-#     """
-#     Graph version:
-#       - Builds PyG graphs (create_graph + add_self_loop)
-#       - Computes/loads edge stats and normalizes edge features
-#       - Returns SimSample with edge_index/edge_features
-#     """
+class CrashGraphDataset(CrashBaseDataset):
+    """
+    Graph version:
+      - Builds PyG graphs (create_graph + add_self_loop)
+      - Computes/loads edge stats and normalizes edge features
+      - Returns SimSample with graph, global_features, and target_series (parity with point-cloud).
+    """
 
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-#         # Filter self-edges and create graphs
-#         _srcs, _dsts = [], []
-#         for src, dst in zip(self.srcs, self.dsts):
-#             mask = src != dst
-#             _srcs.append(np.asarray(src)[mask])
-#             _dsts.append(np.asarray(dst)[mask])
-#         self.srcs, self.dsts = _srcs, _dsts
+        # Filter self-edges and create graphs
+        _srcs, _dsts = [], []
+        for src, dst in zip(self.srcs, self.dsts):
+            mask = src != dst
+            _srcs.append(np.asarray(src)[mask])
+            _dsts.append(np.asarray(dst)[mask])
+        self.srcs, self.dsts = _srcs, _dsts
 
-#         self.graphs: list[Data] = []
-#         for i in range(self.num_samples):
-#             g = self.create_graph(
-#                 self.srcs[i],
-#                 self.dsts[i],
-#                 num_nodes=self.mesh_pos_seq[i][0].shape[0],
-#                 dtype=torch.long,
-#             )
-#             pos0 = self.mesh_pos_seq[i][0]
-#             g = self.add_edge_features(g, pos0)
-#             self.graphs.append(g)
+        Data = _pyg_data.Data
+        self.graphs = []
+        for i in range(self.num_samples):
+            g = self.create_graph(
+                self.srcs[i],
+                self.dsts[i],
+                num_nodes=self.mesh_pos_seq[i][0].shape[0],
+                dtype=torch.long,
+            )
+            pos0 = self.mesh_pos_seq[i][0]
+            g = self.add_edge_features(g, pos0)
+            self.graphs.append(g)
 
-#         # Edge stats
-#         edge_stats_path = os.path.join(self._stats_dir, EDGE_STATS_FILE)
-#         if self.split == "train":
-#             self.edge_stats = self._compute_edge_stats()
-#             save_json(self.edge_stats, edge_stats_path)
-#         else:
-#             if os.path.exists(edge_stats_path):
-#                 self.edge_stats = load_json(edge_stats_path)
-#             else:
-#                 raise FileNotFoundError(f"Edge stats file {edge_stats_path} not found")
+        # Edge stats
+        edge_stats_path = os.path.join(self._stats_dir, EDGE_STATS_FILE)
+        if self.split == "train":
+            self.edge_stats = self._compute_edge_stats()
+            save_json(self.edge_stats, edge_stats_path)
+        else:
+            if os.path.exists(edge_stats_path):
+                self.edge_stats = load_json(edge_stats_path)
+            else:
+                raise FileNotFoundError(f"Edge stats file {edge_stats_path} not found")
 
-#         # Convert loaded stats to tensors
-#         self.edge_stats["edge_mean"] = torch.as_tensor(
-#             self.edge_stats["edge_mean"], dtype=torch.float32
-#         )
-#         self.edge_stats["edge_std"] = torch.as_tensor(
-#             self.edge_stats["edge_std"], dtype=torch.float32
-#         )
+        # Convert loaded stats to tensors
+        self.edge_stats["edge_mean"] = torch.as_tensor(
+            self.edge_stats["edge_mean"], dtype=torch.float32
+        )
+        self.edge_stats["edge_std"] = torch.as_tensor(
+            self.edge_stats["edge_std"], dtype=torch.float32
+        )
 
-#         # Normalize edge features
-#         for i in range(self.num_samples):
-#             self.graphs[i].edge_attr = self._normalize_edge(
-#                 self.graphs[i].edge_attr,
-#                 self.edge_stats["edge_mean"],
-#                 self.edge_stats["edge_std"],
-#             )
+        # Normalize edge features
+        for i in range(self.num_samples):
+            self.graphs[i].edge_attr = self._normalize_edge(
+                self.graphs[i].edge_attr,
+                self.edge_stats["edge_mean"],
+                self.edge_stats["edge_std"],
+            )
 
-#     def __getitem__(self, idx: int):
-#         assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
-#         g = self.graphs[idx]
-#         x, y = self.build_xy(idx)  # [N,3+F], [N,(T-1)*3]
-#         if self.global_features is not None:
-#             gf = {
-#                 k: torch.tensor(v, dtype=torch.float32)
-#                 for k, v in self.global_features[idx].items()
-#             }
-#         else:
-#             gf = None
+    def __getitem__(self, idx: int):
+        assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
+        g = self.graphs[idx]
+        x, y = self.build_xy(idx)
+        if self.global_features is not None:
+            gf = {
+                k: torch.tensor(v, dtype=torch.float32)
+                for k, v in self.global_features[idx].items()
+            }
+        else:
+            gf = None
+        return SimSample(
+            node_features=x,
+            node_target=y,
+            graph=g,
+            global_features=gf,
+            target_series=self.target_series_data[idx],
+        )
 
-#         return SimSample(
-#             node_features=x,
-#             node_target=y,
-#             graph=g,
-#             global_features=gf,
-#         )
+    # ----- graph-specific helpers (use _pyg_data / _pyg_utils so PyG loads only when used) -----
+    @staticmethod
+    def create_graph(src, dst, num_nodes: int, dtype=torch.long):
+        src = torch.as_tensor(src, dtype=dtype)
+        dst = torch.as_tensor(dst, dtype=dtype)
+        edge_index = torch.stack(
+            [torch.cat([src, dst]), torch.cat([dst, src])], dim=0
+        )  # [2, E]
+        edge_index, _ = _pyg_utils.coalesce(edge_index, None, num_nodes=num_nodes)
+        edge_index, _ = _pyg_utils.add_self_loops(edge_index, num_nodes=num_nodes)
+        return _pyg_data.Data(edge_index=edge_index, num_nodes=num_nodes)
 
-#     # ----- graph-specific helpers -----
-#     @staticmethod
-#     def create_graph(src, dst, num_nodes: int, dtype=torch.long):
-#         src = torch.as_tensor(src, dtype=dtype)
-#         dst = torch.as_tensor(dst, dtype=dtype)
-#         edge_index = torch.stack(
-#             [torch.cat([src, dst]), torch.cat([dst, src])], dim=0
-#         )  # [2, E]
-#         edge_index, _ = coalesce(edge_index, None, num_nodes=num_nodes)
-#         edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
-#         return Data(edge_index=edge_index, num_nodes=num_nodes)
+    @staticmethod
+    def add_edge_features(data, pos: torch.Tensor):
+        # data: PyG Data; pos: [N,3]
+        row, col = data.edge_index
+        pos_t = torch.as_tensor(pos, dtype=torch.float32)
+        disp = pos_t[row] - pos_t[col]  # [E,3]
+        disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)  # [E,1]
+        data.edge_attr = torch.cat((disp, disp_norm), dim=1)  # [E,4]
+        return data
 
-#     @staticmethod
-#     def add_edge_features(data: Data, pos: torch.Tensor) -> Data:
-#         # pos: [N,3] (denormalized)
-#         row, col = data.edge_index
-#         pos_t = torch.as_tensor(pos, dtype=torch.float32)
-#         disp = pos_t[row] - pos_t[col]  # [E,3]
-#         disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)  # [E,1]
-#         data.edge_attr = torch.cat((disp, disp_norm), dim=1)  # [E,4]
-#         return data
+    def _compute_edge_stats(self):
+        edge_mean = None
+        edge_meansqr = None
+        for i in range(self.num_samples):
+            x_e = self.graphs[i].edge_attr.to(torch.float32)  # [E,De]
+            m = torch.mean(x_e, dim=0)
+            msq = torch.mean(x_e * x_e, dim=0)
+            edge_mean = m if edge_mean is None else edge_mean + m / self.num_samples
+            edge_meansqr = (
+                msq if edge_meansqr is None else edge_meansqr + msq / self.num_samples
+            )
 
-#     def _compute_edge_stats(self):
-#         edge_mean = None
-#         edge_meansqr = None
-#         for i in range(self.num_samples):
-#             x_e = self.graphs[i].edge_attr.to(torch.float32)  # [E,De]
-#             m = torch.mean(x_e, dim=0)
-#             msq = torch.mean(x_e * x_e, dim=0)
-#             edge_mean = m if edge_mean is None else edge_mean + m / self.num_samples
-#             edge_meansqr = (
-#                 msq if edge_meansqr is None else edge_meansqr + msq / self.num_samples
-#             )
+        edge_var = torch.clamp(edge_meansqr - edge_mean * edge_mean, min=0.0)
+        edge_std = torch.sqrt(edge_var + EPS)
+        return {
+            "edge_mean": edge_mean,
+            "edge_std": edge_std,
+        }
 
-#         edge_var = torch.clamp(edge_meansqr - edge_mean * edge_mean, min=0.0)
-#         edge_std = torch.sqrt(edge_var + EPS)
-#         return {
-#             "edge_mean": edge_mean,
-#             "edge_std": edge_std,
-#         }
-
-#     @staticmethod
-#     def _normalize_edge(edge_x: torch.Tensor, mu: torch.Tensor, std: torch.Tensor):
-#         assert edge_x.shape[-1] == mu.shape[-1] == std.shape[-1], (
-#             f"Edge feature dim mismatch: {edge_x.shape[-1]} vs {mu.shape[-1]} / {std.shape[-1]}"
-#         )
-#         return (edge_x - mu.view(1, -1)) / (std.view(1, -1) + EPS)
+    @staticmethod
+    def _normalize_edge(edge_x: torch.Tensor, mu: torch.Tensor, std: torch.Tensor):
+        assert edge_x.shape[-1] == mu.shape[-1] == std.shape[-1], (
+            f"Edge feature dim mismatch: {edge_x.shape[-1]} vs {mu.shape[-1]} / {std.shape[-1]}"
+        )
+        return (edge_x - mu.view(1, -1)) / (std.view(1, -1) + EPS)
 
 
 class CrashPointCloudDataset(CrashBaseDataset):

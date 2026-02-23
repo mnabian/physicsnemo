@@ -132,7 +132,8 @@ class InferenceWorker:
 
         # How many timesteps to roll out
         self.T = cfg.training.num_time_steps - 1
-        self.Fo = 3
+        # Fo (features per timestep) is computed from the first sample in run_on_single_run
+        # to support both position-only (Fo=3) and dynamic targets (Fo=3+sum(C_k))
 
         # Dataloader workers (for single-sample run datasets this can be 0 or small)
         self.num_workers = cfg.training.num_dataloader_workers
@@ -197,28 +198,33 @@ class InferenceWorker:
                 sample = sample[0]
             sample = sample.to(self.device)
 
-            # Forward rollout: expected to return [T,N,3]
+            # Fo = features per timestep (3 for position-only, 3+sum(C_k) with dynamic targets)
+            N = sample.node_target.size(0)
+            Fo = sample.node_target.size(1) // self.T
+            assert sample.node_target.size(1) == self.T * Fo, (
+                f"Target dim {sample.node_target.size(1)} not divisible by T={self.T}"
+            )
+
+            # Forward rollout: expected to return [T,N,3] for position predictions
             pred_seq = self.model(sample=sample, data_stats=data_stats)
 
-            # Exact sequence (if provided)
+            # Exact sequence (if provided); only positions [:, :, :3] are denormalized for VTP export
             exact_seq = None
             if sample.node_target is not None:
-                N = sample.node_target.size(0)
-                assert sample.node_target.size(1) == self.T * self.Fo
                 exact_seq = (
-                    sample.node_target.view(N, self.T, self.Fo)
+                    sample.node_target.view(N, self.T, Fo)
                     .transpose(0, 1)
                     .contiguous()
                 )
 
-            # Denormalize
+            # Denormalize positions only (first 3 dims per timestep) for VTP export
             pred_seq_denorm = [
                 denormalize_positions(pred_seq[t], pos_mean, pos_std)
                 for t in range(pred_seq.size(0))
             ]
             exact_seq_denorm = (
                 [
-                    denormalize_positions(exact_seq[t], pos_mean, pos_std)
+                    denormalize_positions(exact_seq[t][:, :3], pos_mean, pos_std)
                     for t in range(self.T)
                 ]
                 if exact_seq is not None

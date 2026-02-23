@@ -18,7 +18,7 @@ For an in-depth comparison between the Transolver and MeshGraphNet models and th
 ### Bumper Beam modeling
 
 <p align="center">
-  <img src="../../../docs/img/crash/bumper_beam.gif" alt="Bumper beam animation" width="60%" />
+  <img src="../../../docs/img/crash/bumper_beam.gif" alt="Bumper beam animation" width="80%" />
 
 </p>
 
@@ -38,38 +38,41 @@ For an in-depth comparison between the Transolver and MeshGraphNet models and th
 
 ## Quickstart
 
-This pipeline uses **Hydra experiment configs** to manage different datasets, models, and feature sets from a single codebase. All experiment-specific settings (data paths, model choice, dataset size, feature lists) live in one file under `conf/experiment/`.
+This pipeline uses **Hydra configs** to manage different datasets, models, and feature sets from a single codebase. Each experiment is a self-contained config file in `conf/` with the naming pattern `experiment_*.yaml`.
 
-1) Pick or create an experiment config under `conf/experiment/`. A ready-to-use config for the bumper beam dataset is provided:
+1) Pick or create an experiment config. Ready-to-use configs are provided:
 
 ```
-conf/experiment/bumper_geotransolver.yaml
+conf/experiment_bumper_geotransolver.yaml
+conf/experiment_crash_transolver.yaml
 ```
 
 2) Preprocess your data (see [Data Preprocessing](#data-preprocessing) below).
 
-3) Launch training, passing the experiment name:
+3) **Launch training and inference.** Data paths are not hardcoded—edit the experiment YAML to replace `???` placeholders, or pass overrides on the command line. Training needs `training.raw_data_dir`, `training.raw_data_dir_validation` (and `training.global_features_filepath` for experiments with global features). Inference needs `inference.raw_data_dir_test`.
 
-```bash
-# Single GPU
-python train.py +experiment=bumper_geotransolver
+   **Training:**
 
-# Multi-GPU (DDP)
-torchrun --standalone --nproc_per_node=4 train.py +experiment=bumper_geotransolver
-```
+   ```bash
+   # Single GPU
+   python train.py --config-name=experiment_bumper_geotransolver
 
-4) Run inference with the same experiment:
+   # Multi-GPU (DDP)
+   torchrun --standalone --nproc_per_node=4 train.py --config-name=experiment_bumper_geotransolver
+   ```
 
-```bash
-python inference.py +experiment=bumper_geotransolver
-```
+   **Inference:**
 
-Outputs: predictions are saved under `output_dir_pred` (default `./predicted_vtps/`). Normalization stats are written to `./stats/` during training and reused for inference.
+   ```bash
+   python inference.py --config-name=experiment_bumper_geotransolver
+   ```
+
+   Predictions are saved under `output_dir_pred` (default `./predicted_vtps/`). Normalization stats are written to `./stats/` during training and reused for inference.
 
 You can override any individual config value on the command line without editing any file:
 
 ```bash
-python train.py +experiment=bumper_geotransolver training.epochs=500 training.start_lr=1e-3
+python train.py --config-name=experiment_bumper_geotransolver training.epochs=500 training.start_lr=1e-3
 ```
 
 ## Prerequisites
@@ -195,14 +198,13 @@ The main script is `train.py`.
 
 ```
 conf/
-├── config.yaml                  # master config; sets base defaults
-├── experiment/                  # ← one file per experiment
-│   └── bumper_geotransolver.yaml
-├── datapipe/                    # dataset configs (generic defaults)
+├── experiment_bumper_geotransolver.yaml  # ← self-contained experiment configs
+├── experiment_crash_transolver.yaml
+├── datapipe/                              # dataset configs (generic defaults)
 │   ├── graph.yaml
 │   └── point_cloud.yaml
-├── model/                       # model configs
-│   ├── geotransolver_autoregressive_rollout_training.yaml
+├── model/                                 # model configs
+│   ├── geotransolver_one_shot_training.yaml
 │   ├── transolver_autoregressive_rollout_training.yaml
 │   ├── transolver_one_step_rollout.yaml
 │   ├── transolver_time_conditional.yaml
@@ -212,28 +214,28 @@ conf/
 │   ├── mgn_autoregressive_rollout_training.yaml
 │   ├── mgn_one_step_rollout.yaml
 │   └── mgn_time_conditional.yaml
-├── reader/                      # reader configs
+├── reader/                                # reader configs
 │   ├── vtp.yaml
 │   ├── zarr.yaml
 │   └── d3plot.yaml
-├── training/default.yaml        # generic training hyperparameters
-└── inference/default.yaml       # generic inference options
+├── training/default.yaml                  # generic training hyperparameters
+└── inference/default.yaml                 # generic inference options
 ```
 
-Experiment configs use `# @package _global_` and the `defaults` override mechanism to select the reader, datapipe, and model, and to supply all required fields (`raw_data_dir`, `num_time_steps`, etc.) that are left as `???` (required) in the base configs.
+Each experiment config is self-contained with its own defaults for reader, datapipe, model, training, and inference. All experiment-specific settings (data paths, dataset sizes, feature lists) are defined directly in the experiment config file.
 
 ### Launch Training
 
 Single GPU:
 
 ```bash
-python train.py +experiment=bumper_geotransolver
+python train.py --config-name=experiment_bumper_geotransolver
 ```
 
 Multi-GPU (Distributed Data Parallel):
 
 ```bash
-torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py +experiment=bumper_geotransolver
+torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py --config-name=experiment_bumper_geotransolver
 ```
 
 ## Inference
@@ -241,7 +243,7 @@ torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py +experiment=bumper_ge
 Use `inference.py` to evaluate trained models on test crash runs.
 
 ```bash
-python inference.py +experiment=bumper_geotransolver
+python inference.py --config-name=experiment_bumper_geotransolver
 ```
 
 Predicted meshes are written as .vtp files under
@@ -249,35 +251,58 @@ Predicted meshes are written as .vtp files under
 
 ## Experiments
 
-Each experiment is a single YAML file in `conf/experiment/` that captures everything specific to one dataset/model combination. It overrides the generic base configs without touching them.
+Each experiment is a self-contained YAML file in `conf/` with the naming pattern `experiment_*.yaml`. Each config file includes all defaults and experiment-specific settings.
 
 ### Anatomy of an experiment config
 
+Data paths must be set either in the config file or via CLI overrides. For training: `raw_data_dir`, `raw_data_dir_validation`. For inference: `raw_data_dir_test`. Use `???` in the config to make them mandatory overrides, or set concrete paths directly.
+
 ```yaml
-# conf/experiment/my_experiment.yaml
-# @package _global_
+# conf/experiment_my_experiment.yaml
+
+hydra:
+  job:
+    chdir: True
+  run:
+    dir: ./outputs/
+
+experiment_name: "My-Experiment"
+experiment_desc: "Description of the experiment"
+run_desc: "Run description"
 
 defaults:
-  - override /reader: vtp                 # reader choice
-  - override /datapipe: point_cloud       # datapipe choice
-  - override /model: geotransolver_autoregressive_rollout_training  # model choice
+  - reader: vtp
+  - datapipe: point_cloud
+  - model: geotransolver_one_shot_training
+  - training: default
+  - inference: default
+  - _self_
+
+# ┌───────────────────────────────────────────┐
+# │                   Data                    │
+# └───────────────────────────────────────────┘
 
 training:
-  raw_data_dir: "/path/to/train"
-  raw_data_dir_validation: "/path/to/validation"
-  global_features_filepath: "/path/to/global_features.json"  # or omit for null
+  raw_data_dir: ???              # set in config or via CLI
+  raw_data_dir_validation: ???   # set in config or via CLI
+  global_features_filepath: ???  # or null if not using global features
   num_time_steps: 51
   num_training_samples: 121
   num_validation_samples: 5
 
 inference:
-  raw_data_dir_test: "/path/to/test"
+  raw_data_dir_test: ???         # set in config or via CLI
+
+# ┌───────────────────────────────────────────┐
+# │            Datapipe features              │
+# └───────────────────────────────────────────┘
 
 datapipe:
-  dynamic_targets:             # per-node time-series targets (e.g. strain, stress)
+  static_features: []  # per-node static features (e.g., thickness)
+  dynamic_targets:    # per-node time-series targets (e.g., strain, stress)
     - effective_plastic_strain
     - stress_vm
-  global_features:             # per-run scalar features (loaded from JSON)
+  global_features:   # per-run scalar features (loaded from JSON)
     - velocity_x
     - thickness_scale
     - rwall_origin_y
@@ -285,18 +310,28 @@ datapipe:
 
 ### Provided experiments
 
-| File | Dataset | Model | Notes |
-|------|---------|-------|-------|
-| `bumper_geotransolver.yaml` | Bumper beam (VTP) | GeoTransolver autoregressive | Predicts positions + strain + stress; uses global features (velocity, thickness scale, wall position) |
-| `car_crash_transolver.yaml` | Car body-in-white crash (VTP) | Transolver autoregressive | Position-only targets; node feature: thickness; no global features |
+| File | Dataset | Model | Launch command |
+|------|---------|-------|----------------|
+| `experiment_bumper_geotransolver.yaml` | Bumper beam (VTP) | GeoTransolver one-shot | `python train.py --config-name=experiment_bumper_geotransolver` |
+| `experiment_crash_transolver.yaml` | Car body-in-white crash (VTP) | Transolver autoregressive | `python train.py --config-name=experiment_crash_transolver` |
 
 ### Adding a new experiment
 
-1. Create `conf/experiment/<my_experiment>.yaml` following the template above.
-2. Adjust `override /reader`, `override /model`, `override /datapipe` to select the right components.
-3. Set all required fields: `raw_data_dir`, `raw_data_dir_validation`, `raw_data_dir_test`, `num_time_steps`, `num_training_samples`.
-4. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it via `override /model`.
-5. Run: `python train.py +experiment=<my_experiment>`
+1. Create `conf/experiment_<my_experiment>.yaml` following the template above.
+2. Set defaults for reader, datapipe, model, training, and inference in the `defaults` section.
+3. Set all required fields: `raw_data_dir`, `raw_data_dir_validation` (training), `raw_data_dir_test` (inference), `num_time_steps`, `num_training_samples`. Either set concrete paths in the config or use `???` and pass them via CLI when launching `train.py` or `inference.py` as appropriate.
+4. If using global features, set `global_features_filepath`; otherwise use `null`.
+5. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it in the defaults.
+6. Run: `python train.py --config-name=experiment_<my_experiment>`
+
+You can also override lower-level defaults in the `defaults` section:
+```yaml
+defaults:
+  - reader: vtp
+  - override /model: transolver_time_conditional  # Override model
+  - override /training: default
+  - _self_
+```
 
 ## Datapipe: how inputs are constructed and normalized
 
@@ -358,12 +393,12 @@ Global features are stored in a single JSON file shared across all splits (train
 
 #### Configuration
 
-Point to the JSON file and declare which keys to use in your experiment config:
+Point to the JSON file and declare which keys to use in your experiment config. Set `global_features_filepath` in the config file or via CLI (`training.global_features_filepath=/path/to/global_features.json`):
 
 ```yaml
-# conf/experiment/my_experiment.yaml
+# conf/experiment_my_experiment.yaml
 training:
-  global_features_filepath: "/path/to/global_features.json"
+  global_features_filepath: ???  # or a concrete path
 
 datapipe:
   global_features:       # subset of keys to extract; order defines the global vector
@@ -391,11 +426,11 @@ sample.global_features = {
 In the model forward pass, these are stacked into a single global embedding vector and passed to the network. The **`global_dim`** parameter in the model config must equal the number of global features selected:
 
 ```yaml
-# conf/model/geotransolver_autoregressive_rollout_training.yaml
+# conf/model/geotransolver_one_shot_rollout_training.yaml
 global_dim: 3   # must match len(datapipe.global_features)
 ```
 
-If `global_features` is `null`, `sample.global_features` is `None` and the model must handle this case (currently only `GeoTransolverAutoregressiveRolloutTraining` uses global features; other models ignore them).
+If `global_features` is `null`, `sample.global_features` is `None` and the model must handle this case (currently only `GeoTransolverOneShotTraining` uses global features; other models ignore them).
 
 ## Reader: built-in d3plot and vtp readers and how to add your own
 
@@ -428,15 +463,17 @@ Example Hydra configuration for the VTP reader:
 _target_: vtp_reader.Reader
 ```
 
-Select it from your experiment config:
+Select it in your experiment config defaults:
 
 ```yaml
-# conf/experiment/my_experiment.yaml
+# conf/experiment_my_experiment.yaml
 defaults:
-  - override /reader: vtp
-  - override /datapipe: point_cloud
-  - override /model: transolver_time_conditional
-  ...
+  - reader: vtp
+  - datapipe: point_cloud
+  - model: transolver_time_conditional
+  - training: default
+  - inference: default
+  - _self_
 ```
 
 And configure features in the experiment's `datapipe` block:
@@ -470,15 +507,17 @@ Example Hydra configuration for the Zarr reader:
 _target_: zarr_reader.Reader
 ```
 
-Select it from your experiment config:
+Select it in your experiment config defaults:
 
 ```yaml
-# conf/experiment/my_experiment.yaml
+# conf/experiment_my_experiment.yaml
 defaults:
-  - override /reader: zarr
-  - override /datapipe: point_cloud
-  - override /model: transolver_autoregressive_rollout_training
-  ...
+  - reader: zarr
+  - datapipe: point_cloud
+  - model: transolver_autoregressive_rollout_training
+  - training: default
+  - inference: default
+  - _self_
 ```
 
 And configure features in the experiment's `datapipe` block:
@@ -520,7 +559,7 @@ _target_: my_reader.MyReader
 # any constructor kwargs here, e.g. thresholds or unit conversions
 ```
 
-Then, in your experiment config, select the reader by adding `- override /reader: my_reader` to the `defaults` block. The datapipe will call your reader with `data_dir`, `num_samples`, `split`, and an optional `logger`, and will expect the tuple described above. Provided you populate `'coords'` and the configured feature arrays per run, the rest of the pipeline—normalization, batching, graph construction, and model rollout—will work without code changes.
+Then, in your experiment config, select the reader by adding `- reader: my_reader` to the `defaults` block. The datapipe will call your reader with `data_dir`, `num_samples`, `split`, and an optional `logger`, and will expect the tuple described above. Provided you populate `'coords'` and the configured feature arrays per run, the rest of the pipeline—normalization, batching, graph construction, and model rollout—will work without code changes.
 
 A note on reader signatures and future‑proofing: the datapipe currently passes `data_dir`, `num_samples`, `split`, and `logger` when invoking the reader, and may pass additional keys in the future. To stay resilient, implement your reader with optional parameters and a catch‑all `**kwargs`.
 
@@ -670,10 +709,15 @@ Car-crash test MSE at probe location (Driver, Passenger):
 
 </p>
 
+## TODO
+
+- [ ] **Normalize global features**: Global features (e.g., velocity_x, thickness_scale, rwall_origin_y) are currently passed to the model without normalization. Add support for computing and applying per-feature mean/std (or similar) so global inputs are normalized consistently with node features and positions.
+- [ ] **Support batch_size > 1**: The pipeline currently uses `batch_size=1` due to variable node counts per sample. Add padding or batching logic to enable larger batch sizes for improved throughput.
+
 ## Troubleshooting / FAQ
 
-- I want to run without an experiment file.
-  - You can still override required fields directly: `python train.py training.raw_data_dir=/path/to/train training.num_time_steps=51 training.num_training_samples=100 inference.raw_data_dir_test=/path/to/test`. For recurring setups, creating an experiment file is recommended.
+- I want to run without an experiment config file.
+  - You can still override required fields directly, but you'll need to specify a base config or create a minimal experiment config. For recurring setups, creating an experiment config file is recommended.
 
 - My `.vtp` has no displacement fields.
   - Ensure point_data contains vector arrays named like `displacement_t0.000`, `displacement_t0.005`, ...; the reader falls back to any `displacement_t*` pattern.
@@ -690,5 +734,6 @@ Car-crash test MSE at probe location (Driver, Passenger):
 ## References
 
 - [Automotive Crash Dynamics Modeling Accelerated with Machine Learning](https://arxiv.org/pdf/2510.15201)
+- [GeoTransolver: Learning Physics on Irregular Domains Using Multi-scale Geometry Aware Physics Attention Transformer](https://arxiv.org/pdf/2512.20399)]
 - [Transolver: A Fast Transformer Solver for PDEs on General Geometries](https://arxiv.org/pdf/2402.02366)
 - [Learning Mesh-Based Simulation with Graph Networks](https://arxiv.org/pdf/2010.03409)

@@ -14,47 +14,60 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Car body-in-white crash experiment using Transolver (autoregressive rollout).
-# Matches the dataset and model configuration from the main PhysicsNeMo repo.
-# Usage: python train.py +experiment=car_crash_transolver
+# Bumper beam crash experiment using GeoTransolver (autoregressive rollout).
+# Usage: python train.py --config-name=experiment_bumper_geotransolver
 #
-# To switch model (same dataset, different model):
-#   python train.py +experiment=car_crash_transolver \
-#       'defaults=[{override /model: transolver_time_conditional}]'
-#
-# @package _global_
+# To switch models, pass model=<name> on the CLI, e.g.:
+#   python train.py --config-name=experiment_bumper_geotransolver model=geotransolver_one_shot_training
+
+hydra:
+  job:
+    chdir: True
+  run:
+    dir: ./outputs/
+
+experiment_name: "Bumper-GeoTransolver"
+experiment_desc: "Bumper beam experiment using GeoTransolver"
+run_desc: "Bumper beam experiment using GeoTransolver"
 
 defaults:
-  - override /reader: vtp
-  - override /datapipe: point_cloud
-  - override /model: transolver_autoregressive_rollout_training
+  - reader: vtp
+  - datapipe: point_cloud
+  - model: geotransolver_one_shot_training
+  - training: default
+  - inference: default
+  - _self_
 
 # ┌───────────────────────────────────────────┐
 # │                   Data                    │
 # └───────────────────────────────────────────┘
 
 training:
-  raw_data_dir: "/code/datasets/gm_crash/train"
-  raw_data_dir_validation: "/code/datasets/gm_crash/validation"
-  global_features_filepath: null  # no per-run global scalars for this dataset
+  raw_data_dir: ???              # set in config or via CLI: training.raw_data_dir=/path/to/train
+  raw_data_dir_validation: ???   # set in config or via CLI: training.raw_data_dir_validation=/path/to/validation
+  global_features_filepath: ???  # set in config or via CLI: training.global_features_filepath=/path/to/global_features.json
 
   # ┌───────────────────────────────────────────┐
   # │                 Dataset                   │
   # └───────────────────────────────────────────┘
 
-  num_time_steps: 14
-  num_training_samples: 8
-  num_validation_samples: 8
+  num_time_steps: 51
+  num_training_samples: 121
+  num_validation_samples: 5
 
 inference:
-  raw_data_dir_test: "/code/datasets/gm_crash/test"
+  raw_data_dir_test: ???         # set in config or via CLI: inference.raw_data_dir_test=/path/to/test
 
 # ┌───────────────────────────────────────────┐
 # │            Datapipe features              │
 # └───────────────────────────────────────────┘
 
 datapipe:
-  static_features:
-    - thickness     # per-node thickness read from the VTP/d3plot files
-  dynamic_targets: []   # position-only targets; no extra per-node time series
-  global_features: null
+  static_features: []  # no per-node static features for this dataset
+  dynamic_targets:
+    - effective_plastic_strain
+    - stress_vm
+  global_features:
+    - velocity_x
+    - thickness_scale
+    - rwall_origin_y

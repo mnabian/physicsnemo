@@ -27,17 +27,15 @@ from datapipe import SimSample
 EPS = 1e-8
 
 
-class GeoTransolverAutoregressiveRolloutTraining(GeoTransolver):
+class GeoTransolverOneShotTraining(GeoTransolver):
     """
-    GeoTransolver model with autoregressive rollout training.
+    GeoTransolver model with one-shot training.
 
-    Predicts sequence by autoregressively updating velocity and position
-    using predicted accelerations. Supports gradient checkpointing during training.
+    Predicts sequence by one-shot forward pass.
     """
 
     def __init__(self, *args, **kwargs):
         self.dt: float = kwargs.pop("dt")
-        #self.initial_vel: torch.Tensor = kwargs.pop("initial_vel")
         self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
         super().__init__(*args, **kwargs)
 
@@ -53,20 +51,25 @@ class GeoTransolverAutoregressiveRolloutTraining(GeoTransolver):
         inputs = sample.node_features
         coords = inputs["coords"]  # [N,3]
         features = inputs.get("features", coords.new_zeros((coords.size(0), 0)))
-        initial_vel = sample.global_features["velocity_x"].item()  # TODO mnabian needs better handling for unification
-        global_features = torch.stack([sample.global_features[k] for k in sample.global_features.keys()], dim=0)
+        if sample.global_features is not None:
+            # [num_global] -> [1, 1, num_global] for (B, N_g, C_g)
+            global_embedding = torch.stack(
+                [sample.global_features[k] for k in sample.global_features], dim=0
+            ).unsqueeze(0).unsqueeze(0)
+        else:
+            global_embedding = None
         N = coords.size(0)
         T = self.rollout_steps
 
-        def step_fn(fx, embedding, global_embedding):
-            return super(GeoTransolverAutoregressiveRolloutTraining, self).forward(
-                local_embedding=fx, geometry=embedding, local_positions=embedding, global_embedding=global_embedding
+        def step_fn(fx, embedding, global_emb):
+            return super(GeoTransolverOneShotTraining, self).forward(
+                local_embedding=fx, geometry=embedding, local_positions=embedding, global_embedding=global_emb
             )
 
         fx_t = torch.cat([coords, features], dim=-1)
 
         pred_flat = step_fn(
-            fx_t.unsqueeze(0), coords.unsqueeze(0), global_features.unsqueeze(0).unsqueeze(0)
+            fx_t.unsqueeze(0), coords.unsqueeze(0), global_embedding
         ).squeeze(0)  # [N, P]
 
         # Extract position deltas: first T*3 dims -> [N, T, 3]
@@ -82,8 +85,8 @@ class GeoTransolverAutoregressiveRolloutTraining(GeoTransolver):
         idx = base_pos_dim
         
         if getattr(sample, "target_series", None):
-            # Preserve stable ordering (sorted keys)
-            for name in sorted(sample.target_series.keys()):
+            # Use insertion order to match datapipe.build_xy (dynamic_targets order)
+            for name in sample.target_series:
                 tgt = sample.target_series[name]  # [T, N] or [T, N, C]
                 if tgt.ndim == 2:
                     C = 1

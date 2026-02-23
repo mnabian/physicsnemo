@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.GeoTransolverAutoregressiveRolloutTraining
+_target_: rollout.GeoTransolverOneShotTraining
 _convert_: all
 
 functional_dim: 3
@@ -30,4 +30,3 @@ include_local_features: true
 ### Rollout parameters ###
 num_time_steps: ${training.num_time_steps}
 dt: 5e-3
-#initial_vel: 9.22

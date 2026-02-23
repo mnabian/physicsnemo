@@ -14,45 +14,56 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Bumper beam crash experiment using GeoTransolver (autoregressive rollout).
-# Usage: python train.py +experiment=bumper_geotransolver
+# Car body-in-white crash experiment using Transolver (autoregressive rollout).
+# Usage: python train.py --config-name=experiment_crash_transolver
+#
+# To switch model (same dataset, different model):
+#   python train.py --config-name=experiment_crash_transolver model=transolver_time_conditional
 
-# @package _global_
+hydra:
+  job:
+    chdir: True
+  run:
+    dir: ./outputs/
+
+experiment_name: "Car-Crash-Transolver"
+experiment_desc: "Car body-in-white crash experiment using Transolver"
+run_desc: "Car body-in-white crash experiment using Transolver"
 
 defaults:
-  - override /reader: vtp
-  - override /datapipe: point_cloud
-  - override /model: geotransolver_autoregressive_rollout_training
+  - reader: vtp
+  - datapipe: point_cloud
+  - model: transolver_autoregressive_rollout_training
+  - training: default
+  - inference: default
+  - _self_
 
 # ┌───────────────────────────────────────────┐
 # │                   Data                    │
 # └───────────────────────────────────────────┘
 
 training:
-  raw_data_dir: "/code/mnabian/workspace/bumper/physicsnemo-curator/examples/structural_mechanics/crash/data_new/train"
-  raw_data_dir_validation: "/code/mnabian/workspace/bumper/physicsnemo-curator/examples/structural_mechanics/crash/data_new/validation"
-  global_features_filepath: "/code/datasets/bumper_crush/global_features.json"
+  raw_data_dir: ???              # set in config or via CLI: training.raw_data_dir=/path/to/train
+  raw_data_dir_validation: ???   # set in config or via CLI: training.raw_data_dir_validation=/path/to/validation
+  global_features_filepath: null # no per-run global scalars for this dataset
 
   # ┌───────────────────────────────────────────┐
   # │                 Dataset                   │
   # └───────────────────────────────────────────┘
 
-  num_time_steps: 51
-  num_training_samples: 121
-  num_validation_samples: 5
+  num_time_steps: 14
+  num_training_samples: 8
+  num_validation_samples: 8
 
 inference:
-  raw_data_dir_test: "/code/mnabian/workspace/bumper/physicsnemo-curator/examples/structural_mechanics/crash/data_new/test"
+  raw_data_dir_test: ???         # set in config or via CLI: inference.raw_data_dir_test=/path/to/test
 
 # ┌───────────────────────────────────────────┐
 # │            Datapipe features              │
 # └───────────────────────────────────────────┘
 
 datapipe:
-  dynamic_targets:
-    - effective_plastic_strain
-    - stress_vm
-  global_features:
-    - velocity_x
-    - thickness_scale
-    - rwall_origin_y
+  static_features:
+    - thickness     # per-node thickness read from the VTP/d3plot files
+  dynamic_targets: []   # position-only targets; no extra per-node time series
+  global_features: null

@@ -655,53 +655,39 @@ run_post_processing.sh can automate all evaluation tasks across runs.
 | Teacher-forcing   | 29       | 0.3      |                   |          |          |
 
 <p align="center">
-  <img src="../../../docs/img/crash/Time_integraton_val_loss.png" alt="Time integration validation loss" width="80%" />
+  <img src="../../../docs/img/crash/Time_integraton_val_loss.png" alt="Time integration validation loss" width="60%" />
 
 </p>
 
 ### Models
 
-5. **Accuracy ranking (one-shot):** GeoFlare > GeoTransolver > Transolver > MeshGraphNet. Use GeoFlare when best accuracy is the priority; Transolver when speed is.
+5. **Accuracy ranking (one-shot):** GeoFlare > GeoTransolver > Transolver > MeshGraphNet. Use GeoFlare when best accuracy is the priority.
+6. **Muon** generally outperforms Adam on validation MSE but can overfit; monitor validation loss and consider early stopping or regularization.
 
 **One-shot comparison:**
 
-| Validation MSE    | Bumper(T=50)   | Car crash(T=25)| t/epoch (sec) | 
-|:------------------|:--------:|:--------:|:--------:|
-| Transolver        | 5.75e-3  | 2.67e-3  | 4.8      |
-| GeoTransolver     | 5.43e-3  | 1.94e-3  | 7.5      |
-| GeoFlare          | **4.81e-3**  | **1.45e-3**  | 7.1      |
+| Test Relative L^2 | Bumper(Adam)   | Bumper(Muon) | Car crash(Adam)   | Car crash(Muon)|
+|:------------------|:--------:|:--------:|:--------:|:--------:|
+| Transolver        | 9.37e-3  | 9.12e-3  | 1.60e-2  | 1.60e-2  |
+| GeoTransolver     | 9.40e-3  | 7.32e-3  | 1.40e-2  | 1.33e-2  |
+| GeoFlare          | **8.73e-3**  | **6.80e-3**  | **1.16e-2**  | **8.95e-3**  |
 
-Car-crash test MSE at probe location (Driver, Passenger):
+Adam: Car-crash test MSE at probe location (Driver, Passenger):
 
-| Driver   | position   | velocity | acceleration | Passenger   | position   | velocity | acceleration | 
+| Driver            | position   | velocity | acceleration | Passenger   | position   | velocity | acceleration | 
 |:------------------|:--------:|:--------:|:--------:|:------------------|:--------:|:--------:|:--------:|
 | Transolver        | 2.21e-3  | 8.21e-1  | 5.60e+3  | Transolver        | 2.43e-3  | 9.31e-1  | 6.81e+3  |
 | GeoTransolver     | 1.51e-3  | 5.74e-1  | 3.99e+3  | GeoTransolver     | 1.92e-3  | 7.03e-1  | 5.53e+3  |
 | GeoFlare          | **1.01e-3**  | **4.38e-1**  | **2.99e+3**  | GeoFlare          | **1.19e-3**  | **5.16e-1**  | **3.93e+3**  |
 
 
+Muon: Car-crash test MSE at probe location (Driver, Passenger):
 
-### Optimizer
-
-6. **Muon** generally outperforms Adam on validation MSE but can overfit; monitor validation loss and consider early stopping or regularization.
-
-**Car crash (Muon vs Adam):**
-
-| Validation MSE    | Adam     | Muon     | 
-|:------------------|:--------:|:--------:|
-| Transolver        | 2.67e-3  | **2.46e-3**  |
-| GeoTransolver     | 1.94e-3  | **1.19e-3**  |
-| GeoFlare          | 1.45e-3  | **1.30e-3**  |
-
-
-Car-crash test MSE at probe location (Driver, Passenger):
-
-| Driver   | position   | velocity | acceleration | Passenger   | position   | velocity | acceleration | 
+| Driver            | position   | velocity | acceleration | Passenger   | position   | velocity | acceleration | 
 |:------------------|:--------:|:--------:|:--------:|:------------------|:--------:|:--------:|:--------:|
 | Transolver        | 2.63e-3  | 8.41e-1  | 2.14e+3  | Transolver        | 2.21e-3  | 7.25e-1  | 2.24e+3  |
 | GeoTransolver     | 1.84e-3  | 6.09e-1  | 1.71e+3  | GeoTransolver     | 1.72e-3  | 5.53e-1  | 1.80e+3  |
 | GeoFlare          | **7.18e-4**  | **2.71e-1**  | **1.27e+3**  | GeoFlare          | **6.52e-4**  | **2.53e-1**  | **1.45e+3**  |
-
 
 
 <p align="center">

@@ -723,6 +723,7 @@ Muon: Car-crash test MSE at probe location (Driver, Passenger):
 ## TODO
 
 - [ ] **Normalize global features**: Global features (e.g., velocity_x, thickness_scale, rwall_origin_y) are currently passed to the model without normalization. Add support for computing and applying per-feature mean/std (or similar) so global inputs are normalized consistently with node features and positions.
+- [ ] **Normalize dynamic targets**: Dynamic targets (e.g., effective_plastic_strain, stress_vm) are currently passed in the target `y` without normalization, while positions are normalized. Add per-target mean/std and denormalize at inference when exporting to VTP.
 - [ ] **Support batch_size > 1**: The pipeline currently uses `batch_size=1` due to variable node counts per sample. Add padding or batching logic to enable larger batch sizes for improved throughput.
 
 ## Troubleshooting / FAQ

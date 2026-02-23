@@ -242,8 +242,33 @@ torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py --config-name=experim
 
 Use `inference.py` to evaluate trained models on test crash runs.
 
+**Note:** For inference, the data directory should be structured
+such that files for each run are in a `run_<ID>` folder.
+
+Example directory structure:
+```
+data/
+├── run_0/
+│   ├── Run0.vtp
+│   └── ...
+├── run_1/
+│   ├── Run1.vtp
+│   └── ...
+└── run_2/
+    ├── Run2.vtp
+    └── ...
+```
+
+Single GPU:
+
 ```bash
 python inference.py --config-name=experiment_bumper_geotransolver
+```
+
+Multi-GPU (Distributed Data Parallel):
+
+```bash
+torchrun --standalone --nproc_per_node=<NUM_GPUS> inference.py
 ```
 
 Predicted meshes are written as .vtp files under

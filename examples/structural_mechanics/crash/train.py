@@ -247,24 +247,12 @@ class Trainer:
 
     def forward(self, sample: SimSample):
         with autocast(device_type="cuda", enabled=self.amp):
-            T = self.rollout_steps
-
-            # Model forward - returns [N, T*Fo] with interleaved features per timestep
+            # Model forward - returns [N, T, Fo]
             pred = self.model(sample=sample, data_stats=self.data_stats)
 
-            # Target is also [N, T*Fo] with interleaved features per timestep
-            target_flat = sample.node_target  # [N, T*Fo]
-            N = target_flat.size(0)
-            
-            # Compute Fo dynamically from target shape
-            assert target_flat.size(1) % T == 0, (
-                f"Target dim {target_flat.size(1)} not divisible by T={T}"
-            )
-            Fo = target_flat.size(1) // T  # Features per timestep (3 + sum(C_k))
-            
-            # Both pred and target are already [N, T*Fo] with same interleaved layout
-            # Compute MSE directly without reshape (or reshape both for logging/viz)
-            return self.criterion(pred, target_flat)
+            # Target is [N, T, Fo]
+            target = sample.node_target
+            return self.criterion(pred, target)
 
     def backward(self, loss):
         if self.amp:
@@ -284,28 +272,16 @@ class Trainer:
         MSE_w_time = torch.zeros(self.rollout_steps, device=self.dist.device)
         for idx, sample in enumerate(self.val_dataloader):
             sample = sample[0].to(self.dist.device)  # SimSample .to()
-            T = self.rollout_steps
 
-            # Model forward - returns [N, T*Fo] with interleaved features per timestep
-            pred_flat = self.model(sample=sample, data_stats=self.data_stats)
+            # Model forward - returns [N, T, Fo]
+            pred = self.model(sample=sample, data_stats=self.data_stats)
 
-            # Target is also [N, T*Fo] with interleaved features per timestep
-            target_flat = sample.node_target  # [N, T*Fo]
-            N = target_flat.size(0)
-            
-            # Compute Fo dynamically from target shape
-            assert target_flat.size(1) % T == 0, (
-                f"Target dim {target_flat.size(1)} not divisible by T={T}"
-            )
-            Fo = target_flat.size(1) // T  # Features per timestep (3 + sum(C_k))
-            
-            # Reshape both to [T, N, Fo] for timestep-wise error computation
-            pred_seq = pred_flat.view(N, T, Fo).transpose(0, 1).contiguous()  # [T,N,Fo]
-            exact_seq = target_flat.view(N, T, Fo).transpose(0, 1).contiguous()  # [T,N,Fo]
+            # Target is [N, T, Fo]
+            target = sample.node_target
 
             # Compute and add error
-            SqError = torch.square(pred_seq - exact_seq)
-            MSE_w_time += torch.mean(SqError, dim=(1, 2))
+            SqError = torch.square(pred - target)
+            MSE_w_time += torch.mean(SqError, dim=(0, 2))  # mean over N, Fo per timestep
             MSE += torch.mean(SqError)
 
         # Sum errors across all ranks

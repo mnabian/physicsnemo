@@ -45,70 +45,33 @@ class GeoTransolverOneShotTraining(GeoTransolver):
             sample: SimSample containing node_features and node_target
             data_stats: dict containing normalization stats
         Returns:
-            pred: [N, (T-1)*Fo] where Fo = 3 + sum(C_k), interleaved per timestep
-                  Layout: [dx_t1, dy_t1, dz_t1, eps_t1, vm_t1, dx_t2, ...]
+            pred: [N, T, Fo] where Fo = 3 + sum(C_k), layout per timestep
         """
         inputs = sample.node_features
         coords = inputs["coords"]  # [N,3]
         features = inputs.get("features", coords.new_zeros((coords.size(0), 0)))
+        global_embedding = None
         if sample.global_features is not None:
-            # [num_global] -> [1, 1, num_global] for (B, N_g, C_g)
             global_embedding = torch.stack(
                 [sample.global_features[k] for k in sample.global_features], dim=0
-            ).unsqueeze(0).unsqueeze(0)
-        else:
-            global_embedding = None
-        N = coords.size(0)
-        T = self.rollout_steps
+            ).unsqueeze(0).unsqueeze(0)  # [1, 1, num_global]
 
-        def step_fn(fx, embedding, global_emb):
-            return super(GeoTransolverOneShotTraining, self).forward(
-                local_embedding=fx, geometry=embedding, local_positions=embedding, global_embedding=global_emb
-            )
+        N, T = coords.size(0), self.rollout_steps
+        Fo = sample.node_target.shape[2]  # 3 + sum(C_k)
 
         fx_t = torch.cat([coords, features], dim=-1)
+        pred_flat = super(GeoTransolverOneShotTraining, self).forward(
+            local_embedding=fx_t.unsqueeze(0),
+            geometry=coords.unsqueeze(0),
+            local_positions=coords.unsqueeze(0),
+            global_embedding=global_embedding,
+        ).squeeze(0)  # [N, T*Fo]
 
-        pred_flat = step_fn(
-            fx_t.unsqueeze(0), coords.unsqueeze(0), global_embedding
-        ).squeeze(0)  # [N, P]
-
-        # Extract position deltas: first T*3 dims -> [N, T, 3]
-        base_pos_dim = T * 3
-        if pred_flat.shape[-1] < base_pos_dim:
+        if pred_flat.shape[-1] < T * Fo:
             raise ValueError(
-                f"Model output dim {pred_flat.shape[-1]} smaller than required position dim {base_pos_dim}"
+                f"Model output dim {pred_flat.shape[-1]} smaller than T*Fo={T * Fo}"
             )
-        pos_pred = pred_flat[:, :base_pos_dim].view(N, T, 3)  # [N, T, 3]
-
-        # Extract dynamic target series and build per-timestep interleaved output
-        per_t_parts = [pos_pred]  # Start with positions [N, T, 3]
-        idx = base_pos_dim
-        
-        if getattr(sample, "target_series", None):
-            # Use insertion order to match datapipe.build_xy (dynamic_targets order)
-            for name in sample.target_series:
-                tgt = sample.target_series[name]  # [T, N] or [T, N, C]
-                if tgt.ndim == 2:
-                    C = 1
-                else:
-                    C = tgt.shape[-1]
-                need = T * C
-                if idx + need > pred_flat.shape[-1]:
-                    raise ValueError(
-                        f"Model output dim {pred_flat.shape[-1]} insufficient for target '{name}' requiring {need} dims at idx {idx}"
-                    )
-                sl = pred_flat[:, idx : idx + need].view(N, T, C)  # [N, T, C]
-                per_t_parts.append(sl)
-                idx += need
-
-        # Concatenate along feature dim per timestep: [N, T, Fo]
-        pred_per_t = torch.cat(per_t_parts, dim=-1)  # [N, T, Fo] where Fo = 3 + sum(C_k)
-        
-        # Flatten to [N, T*Fo] with interleaved layout
-        pred_interleaved = pred_per_t.flatten(start_dim=1)  # [N, T*Fo]
-        
-        return pred_interleaved
-
+        return pred_flat[:, : T * Fo].view(N, T, Fo)
 
 class TransolverAutoregressiveRolloutTraining(Transolver):
     """
@@ -130,7 +93,7 @@ class TransolverAutoregressiveRolloutTraining(Transolver):
             sample: SimSample containing node_features and node_target
             data_stats: dict containing normalization stats
         Returns:
-            [T, N, 3] rollout of predicted positions
+            [N, T, 3] rollout of predicted positions
         """
         inputs = sample.node_features
         coords = inputs["coords"]  # [N,3]
@@ -181,7 +144,7 @@ class TransolverAutoregressiveRolloutTraining(Transolver):
             outputs.append(y_t2)
             y_t1, y_t0 = y_t2, y_t1
 
-        return torch.stack(outputs, dim=0)  # [T,N,3]
+        return torch.stack(outputs, dim=0).transpose(0, 1)  # [N,T,3]
 
 
 class TransolverTimeConditionalRollout(Transolver):
@@ -205,7 +168,7 @@ class TransolverTimeConditionalRollout(Transolver):
             Sample: SimSample containing node_features and node_target
             data_stats: dict containing normalization stats
         Returns:
-            [T, N, 3] rollout of predicted positions
+            [N, T, 3] rollout of predicted positions
         """
         inputs = sample.node_features
         x = inputs["coords"]  # [N,3]
@@ -238,7 +201,7 @@ class TransolverTimeConditionalRollout(Transolver):
             y_t2 = x + outf
             outputs.append(y_t2)
 
-        return torch.stack(outputs, dim=0)  # [T,N,3]
+        return torch.stack(outputs, dim=0).transpose(0, 1)  # [N,T,3]
 
 
 # class MeshGraphNetAutoregressiveRolloutTraining(MeshGraphNet):
@@ -367,10 +330,10 @@ class TransolverOneStepRollout(
         coords0 = inputs["coords"]  # [N,3]
         features = inputs.get("features", coords0.new_zeros((coords0.size(0), 0)))
 
-        # Ground truth sequence [T,N,3]
+        # Ground truth sequence [T+1, N, 3] (t0 + rollout steps)
         N = coords0.size(0)
         gt_seq = torch.cat(
-            [coords0.unsqueeze(0), sample.node_target.view(N, -1, 3).transpose(0, 1)],
+            [coords0.unsqueeze(0), sample.node_target.transpose(0, 1)],  # [N,T,3] -> [T,N,3]
             dim=0,
         )
 
@@ -416,7 +379,7 @@ class TransolverOneStepRollout(
                 # autoregressive update for inference
                 y_t0, y_t1 = y_t1, y_t2_pred
 
-        return torch.stack(outputs, dim=0)  # [T,N,3]
+        return torch.stack(outputs, dim=0).transpose(0, 1)  # [N,T,3]
 
 
 # class MeshGraphNetOneStepRollout(MeshGraphNet):
@@ -550,7 +513,7 @@ class FIGConvUNetTimeConditionalRollout(FIGConvUNet):
             y_t = x + outf
             outputs.append(y_t)
 
-        return torch.stack(outputs, dim=0)  # [T, N, 3]
+        return torch.stack(outputs, dim=0).transpose(0, 1)  # [N, T, 3]
 
 
 class FIGConvUNetOneStepRollout(FIGConvUNet):
@@ -573,16 +536,16 @@ class FIGConvUNetOneStepRollout(FIGConvUNet):
             Sample: SimSample containing node_features and node_target
             data_stats: dict containing normalization stats
         Returns:
-            [T, N, 3] rollout of predicted positions
+            [N, T, 3] rollout of predicted positions
         """
         inputs = sample.node_features
         x0 = inputs["coords"]  # initial pos [N, 3]
         features = inputs.get("features", x0.new_zeros((x0.size(0), 0)))  # [N, F]
 
-        # Ground truth sequence [T, N, 3]
+        # Ground truth sequence [T+1, N, 3] (t0 + rollout steps)
         N = x0.size(0)
         gt_seq = torch.cat(
-            [x0.unsqueeze(0), sample.node_target.view(N, -1, 3).transpose(0, 1)],
+            [x0.unsqueeze(0), sample.node_target.transpose(0, 1)],  # [N,T,3] -> [T,N,3]
             dim=0,
         )
 
@@ -636,7 +599,7 @@ class FIGConvUNetOneStepRollout(FIGConvUNet):
                 # autoregressive update for inference
                 y_t0, y_t1 = y_t1, y_t2_pred
 
-        return torch.stack(outputs, dim=0)  # [T, N, 3]
+        return torch.stack(outputs, dim=0).transpose(0, 1)  # [N, T, 3]
 
 
 class FIGConvUNetAutoregressiveRolloutTraining(FIGConvUNet):
@@ -659,7 +622,7 @@ class FIGConvUNetAutoregressiveRolloutTraining(FIGConvUNet):
             sample: SimSample containing node_features and node_target
             data_stats: dict containing normalization stats
         Returns:
-            [T, N, 3] rollout of predicted positions
+            [N, T, 3] rollout of predicted positions
         """
         inputs = sample.node_features
         coords = inputs["coords"]  # [N, 3]
@@ -718,4 +681,4 @@ class FIGConvUNetAutoregressiveRolloutTraining(FIGConvUNet):
             outputs.append(y_t2)
             y_t1, y_t0 = y_t2, y_t1
 
-        return torch.stack(outputs, dim=0)  # [T, N, 3]
+        return torch.stack(outputs, dim=0).transpose(0, 1)  # [N, T, 3]

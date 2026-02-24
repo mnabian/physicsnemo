@@ -44,7 +44,7 @@ class SimSample:
     node_features: dict[str, Tensor] with at least:
       - 'coords': FloatTensor [N, 3]
       - any other feature keys configured, e.g., 'thickness': [N, Fk]
-    node_target   : FloatTensor [N, Dout] or [N, (T-1)*3] depending on task
+    node_target   : FloatTensor [N, T, Fo] where T=rollout steps, Fo=3+sum(C_k)
     target_series : Optional[dict[str, Tensor]] mapping name -> [T, N] or [T, N, C]
     graph         : PyG Data or None
     """
@@ -152,6 +152,22 @@ class CrashBaseDataset:
         # Load raw records via provided reader callable (Hydra can pass a class/callable)
         if reader is None:
             raise ValueError("Data reader function is not specified.")
+
+        # Require global_features_filepath when global_features keys are configured
+        if global_features and len(global_features) > 0:
+            if not global_features_filepath or not str(global_features_filepath).strip():
+                raise ValueError(
+                    "datapipe.global_features is configured but training.global_features_filepath "
+                    "is not set or is empty. Set it via config or CLI, e.g. "
+                    "training.global_features_filepath=/path/to/global_features.json"
+                )
+            if str(global_features_filepath).strip() == "???":
+                raise ValueError(
+                    "datapipe.global_features is configured but training.global_features_filepath "
+                    "is unresolved (???). Set it via config or CLI, e.g. "
+                    "training.global_features_filepath=/path/to/global_features.json"
+                )
+
         self.srcs, self.dsts, point_data, global_features = reader(
             data_dir=self.data_dir,
             num_samples=num_samples,
@@ -313,8 +329,7 @@ class CrashBaseDataset:
         x: dict with:
             - 'coords': [N, 3] at t0
             - 'features': [N, F] concatenated (static + flattened dynamic)
-        y: [N, (T-1)*(3 + sum_k C_k)] where features are interleaved per timestep
-           Layout: [dx_t1, dy_t1, dz_t1, eps_t1, vm_t1, dx_t2, dy_t2, dz_t2, eps_t2, vm_t2, ...]
+        y: [N, T, Fo] where T=rollout steps, Fo=3+sum(C_k) per timestep
         """
         assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
         pos_seq = self.mesh_pos_seq[idx]  # [T,N,3]
@@ -347,16 +362,16 @@ class CrashBaseDataset:
             y_per_t = torch.cat([pos_rollout] + dyn_list, dim=-1)  # [T-1, N, Fo]
         else:
             y_per_t = pos_rollout  # [T-1, N, 3]
-        
-        # Flatten to [N, (T-1)*Fo]
-        y = y_per_t.transpose(0, 1).flatten(start_dim=1)  # [N, (T-1)*Fo]
 
-        _, Dout = self._xy_shapes(idx)
+        # [N, T, Fo] where T = rollout steps
+        y = y_per_t.transpose(0, 1)  # [N, T-1, Fo]
+
+        T_out, Fo = y.shape[1], y.shape[2]
         assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
             f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
         )
-        assert y.shape == (N, Dout), (
-            f"target shape {y.shape} does not match expected (N={N}, Dout={Dout})"
+        assert y.shape == (N, T_out, Fo), (
+            f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
         )
         # y now includes dynamic targets interleaved per timestep
         return x, y

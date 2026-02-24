@@ -87,10 +87,7 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-This will install:
-
-- lasso-python (for LS-DYNA file parsing),
-- torch_geometric and torch_scatter (for GNN operations),
+To use graph-based models (e.g., MeshGraphNet) or the graph datapipe, install the PhysicsNeMo `gnns` extra: `pip install "nvidia-physicsnemo[gnns]"` or `uv sync --extra gnns`.
 
 ## Data Preprocessing
 

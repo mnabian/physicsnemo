@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Car body-in-white crash experiment using Transolver (autoregressive rollout).
+# Car body-in-white crash experiment using GeoTransolver (one-shot).
 # Usage: python train.py --config-name=experiment_crash_transolver
 #
 # To switch model (same dataset, different model):
@@ -26,14 +26,14 @@ hydra:
   run:
     dir: ./outputs/
 
-experiment_name: "Car-Crash-Transolver"
-experiment_desc: "Car body-in-white crash experiment using Transolver"
-run_desc: "Car body-in-white crash experiment using Transolver"
+experiment_name: "Car-Crash-GeoTransolver"
+experiment_desc: "Car body-in-white crash experiment using GeoTransolver"
+run_desc: "Car body-in-white crash experiment using GeoTransolver"
 
 defaults:
   - reader: vtp
   - datapipe: point_cloud
-  - model: transolver_autoregressive_rollout_training
+  - model: geotransolver_one_shot_training
   - training: default
   - inference: default
   - _self_
@@ -51,9 +51,9 @@ training:
   # │                 Dataset                   │
   # └───────────────────────────────────────────┘
 
-  num_time_steps: 14
-  num_training_samples: 8
-  num_validation_samples: 8
+  num_time_steps: 26
+  num_training_samples: 136
+  num_validation_samples: 15
 
 inference:
   raw_data_dir_test: ???         # set in config or via CLI: inference.raw_data_dir_test=/path/to/test
@@ -67,3 +67,12 @@ datapipe:
     - thickness     # per-node thickness read from the VTP/d3plot files
   dynamic_targets: []   # position-only targets; no extra per-node time series
   global_features: null
+
+# ┌───────────────────────────────────────────┐
+# │            Model overrides                 │
+# └───────────────────────────────────────────┘
+
+model:
+  functional_dim: 4   # coords (3) + thickness (1)
+  out_dim: 39        # (num_time_steps - 1) * 3 = 13 * 3
+  global_dim: null    # no global features for this dataset

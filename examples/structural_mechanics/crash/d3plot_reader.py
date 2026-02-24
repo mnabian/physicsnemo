@@ -425,13 +425,18 @@ class Reader:
         data_dir: str,
         num_samples: int,
         split: str,
+        global_features_filepath: str | None = None,
         logger=None,
+        **kwargs,
     ):
         write_vtp = False if split in ("train", "validation") else True
-        return process_d3plot_data(
+        srcs, dsts, point_data_all = process_d3plot_data(
             data_dir=data_dir,
             num_samples=num_samples,
             wall_node_disp_threshold=self.wall_node_disp_threshold,
             write_vtp=write_vtp,
             logger=logger,
         )
+        # d3plot does not support global features; return empty dict per sample
+        global_features_all = [{} for _ in point_data_all]
+        return srcs, dsts, point_data_all, global_features_all

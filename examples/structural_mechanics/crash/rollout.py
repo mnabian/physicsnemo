@@ -36,7 +36,18 @@ class GeoTransolverOneShotTraining(GeoTransolver):
 
     def __init__(self, *args, **kwargs):
         self.dt: float = kwargs.pop("dt")
-        self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
+        num_time_steps: int = kwargs.pop("num_time_steps")
+        self.rollout_steps = num_time_steps - 1
+        out_dim: int = kwargs.get("out_dim")
+        # Fo_min = 3 for position-only; with dynamic_targets it can be larger
+        Fo_min = 3
+        required_min = self.rollout_steps * Fo_min
+        if out_dim is not None and out_dim < required_min:
+            raise ValueError(
+                f"out_dim={out_dim} is too small for num_time_steps={num_time_steps} "
+                f"(rollout_steps={self.rollout_steps}). Need out_dim >= {required_min} "
+                f"for position-only, or >= rollout_steps * (3 + sum(dynamic_targets))."
+            )
         super().__init__(*args, **kwargs)
 
     def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:

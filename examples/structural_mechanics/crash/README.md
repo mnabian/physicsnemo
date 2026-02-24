@@ -239,21 +239,15 @@ torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py --config-name=experim
 
 Use `inference.py` to evaluate trained models on test crash runs.
 
-**Note:** For inference, the data directory should be structured
-such that files for each run are in a `run_<ID>` folder.
+**Note:** For inference, place all `.vtp` files directly in `raw_data_dir_test` (flat layout).
+Each file is treated as one run; outputs are written under `output_dir_pred/rank{N}/{run_name}/`.
 
 Example directory structure:
 ```
 data/
-├── run_0/
-│   ├── Run0.vtp
-│   └── ...
-├── run_1/
-│   ├── Run1.vtp
-│   └── ...
-└── run_2/
-    ├── Run2.vtp
-    └── ...
+├── Run0.vtp
+├── Run1.vtp
+└── Run2.vtp
 ```
 
 Single GPU:
@@ -265,11 +259,11 @@ python inference.py --config-name=experiment_bumper_geotransolver
 Multi-GPU (Distributed Data Parallel):
 
 ```bash
-torchrun --standalone --nproc_per_node=<NUM_GPUS> inference.py
+torchrun --standalone --nproc_per_node=<NUM_GPUS> inference.py --config-name=experiment_bumper_geotransolver
 ```
 
-Predicted meshes are written as .vtp files under
-./predicted_vtps/, and can be opened using ParaView.
+Runs are sharded across ranks: rank `r` processes `run_items[r::world_size]`.
+Predicted meshes are written as .vtp files under `./predicted_vtps/`, and can be opened using ParaView.
 
 ## Experiments
 

@@ -132,27 +132,38 @@ def save_vtp_sequence(
                 # Add exact extra fields and compute differences
                 if exact_extra_fields:
                     for name, field_seq in exact_extra_fields.items():
-                        exact_field_np = field_seq[t].detach().cpu().numpy()  # [N] or [N,C]
+                        exact_field_np = (
+                            field_seq[t].detach().cpu().numpy()
+                        )  # [N] or [N,C]
                         if exact_field_np.shape[0] != mesh_exact.n_points:
                             logging.warning(
                                 f"Exact field '{name}' size mismatch at t={t}"
                             )
                             continue
                         if exact_field_np.ndim == 1 or exact_field_np.shape[1] == 1:
-                            mesh_exact.point_data[f"exact_{name}"] = exact_field_np.squeeze()
+                            mesh_exact.point_data[f"exact_{name}"] = (
+                                exact_field_np.squeeze()
+                            )
                         else:
                             mesh_exact.point_data[f"exact_{name}"] = exact_field_np
 
                         if extra_fields and name in extra_fields:
                             pred_field_np = extra_fields[name][t].detach().cpu().numpy()
                             if pred_field_np.shape == exact_field_np.shape:
-                                if pred_field_np.ndim == 1 or pred_field_np.shape[1] == 1:
-                                    mesh_exact.point_data[f"pred_{name}"] = pred_field_np.squeeze()
+                                if (
+                                    pred_field_np.ndim == 1
+                                    or pred_field_np.shape[1] == 1
+                                ):
+                                    mesh_exact.point_data[f"pred_{name}"] = (
+                                        pred_field_np.squeeze()
+                                    )
                                     mesh_exact.point_data[f"diff_{name}"] = (
                                         pred_field_np - exact_field_np
                                     ).squeeze()
                                 else:
-                                    mesh_exact.point_data[f"pred_{name}"] = pred_field_np
+                                    mesh_exact.point_data[f"pred_{name}"] = (
+                                        pred_field_np
+                                    )
                                     mesh_exact.point_data[f"diff_{name}"] = (
                                         pred_field_np - exact_field_np
                                     )

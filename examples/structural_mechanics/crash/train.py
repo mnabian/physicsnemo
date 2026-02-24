@@ -186,7 +186,9 @@ class Trainer:
                 try:
                     logger0.info(f"\n{_torchinfo.summary(self.model, verbose=0)}")
                 except Exception:
-                    logger0.info("(torchinfo summary skipped: model requires sample input)")
+                    logger0.info(
+                        "(torchinfo summary skipped: model requires sample input)"
+                    )
 
         # distributed data parallel for multi-node training
         if self.dist.world_size > 1:
@@ -281,7 +283,9 @@ class Trainer:
 
             # Compute and add error
             SqError = torch.square(pred - target)
-            MSE_w_time += torch.mean(SqError, dim=(0, 2))  # mean over N, Fo per timestep
+            MSE_w_time += torch.mean(
+                SqError, dim=(0, 2)
+            )  # mean over N, Fo per timestep
             MSE += torch.mean(SqError)
 
         # Sum errors across all ranks
@@ -335,7 +339,11 @@ def main(cfg: DictConfig) -> None:
             # Per-batch progress
             if (batch_idx + 1) % log_every == 0 or batch_idx == 0:
                 batch_duration = time.time() - batch_start
-                mem_gb = torch.cuda.memory_reserved() / 1024**3 if torch.cuda.is_available() else 0.0
+                mem_gb = (
+                    torch.cuda.memory_reserved() / 1024**3
+                    if torch.cuda.is_available()
+                    else 0.0
+                )
                 logger0.info(
                     f"Epoch {epoch + 1} [{batch_idx + 1}/{epoch_len}] "
                     f"Loss: {loss.detach().item():.6f} "
@@ -389,7 +397,9 @@ def main(cfg: DictConfig) -> None:
                 rows = [["MSE (overall)", f"{mse_val:.6f}"]]
                 for i, m in enumerate(mse_w_time):
                     rows.append([f"timestep_{i}_MSE", f"{m.item():.6f}"])
-                logger0.info(f"\nValidation metrics:\n{_tabulate.tabulate(rows, headers=['Metric', 'Value'], tablefmt='pretty')}\n")
+                logger0.info(
+                    f"\nValidation metrics:\n{_tabulate.tabulate(rows, headers=['Metric', 'Value'], tablefmt='pretty')}\n"
+                )
 
             if dist.rank == 0:
                 # Log to tensorboard

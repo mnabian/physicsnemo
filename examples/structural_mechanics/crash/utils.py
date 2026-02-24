@@ -33,16 +33,12 @@ def load_global_features(json_path: str) -> dict[str, dict[str, float]]:
         data = json.load(f)
 
     if not isinstance(data, dict):
-        raise TypeError(
-            "Global features JSON must be a dict keyed by run_id"
-        )
+        raise TypeError("Global features JSON must be a dict keyed by run_id")
 
     # Optional: sanity check values
     for run_id, features in data.items():
         if not isinstance(features, dict):
-            raise TypeError(
-                f"Global features for run '{run_id}' must be a dict"
-            )
+            raise TypeError(f"Global features for run '{run_id}' must be a dict")
 
     return data
 
@@ -64,6 +60,4 @@ def get_global_features_for_run(
     try:
         return all_global_features[run_id]
     except KeyError:
-        raise KeyError(
-            f"run_id '{run_id}' not found in global features file"
-        )
+        raise KeyError(f"run_id '{run_id}' not found in global features file")

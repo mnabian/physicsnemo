@@ -18,7 +18,8 @@ import torch
 from torch.utils.checkpoint import checkpoint as ckpt
 
 from physicsnemo.models.transolver import Transolver
-#from physicsnemo.models.meshgraphnet import MeshGraphNet
+
+# from physicsnemo.models.meshgraphnet import MeshGraphNet
 from physicsnemo.models.figconvnet.figconvunet import FIGConvUNet
 from physicsnemo.experimental.models.geotransolver import GeoTransolver
 
@@ -63,26 +64,35 @@ class GeoTransolverOneShotTraining(GeoTransolver):
         features = inputs.get("features", coords.new_zeros((coords.size(0), 0)))
         global_embedding = None
         if sample.global_features is not None:
-            global_embedding = torch.stack(
-                [sample.global_features[k] for k in sample.global_features], dim=0
-            ).unsqueeze(0).unsqueeze(0)  # [1, 1, num_global]
+            global_embedding = (
+                torch.stack(
+                    [sample.global_features[k] for k in sample.global_features], dim=0
+                )
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )  # [1, 1, num_global]
 
         N, T = coords.size(0), self.rollout_steps
         Fo = sample.node_target.shape[2]  # 3 + sum(C_k)
 
         fx_t = torch.cat([coords, features], dim=-1)
-        pred_flat = super(GeoTransolverOneShotTraining, self).forward(
-            local_embedding=fx_t.unsqueeze(0),
-            geometry=coords.unsqueeze(0),
-            local_positions=coords.unsqueeze(0),
-            global_embedding=global_embedding,
-        ).squeeze(0)  # [N, T*Fo]
+        pred_flat = (
+            super(GeoTransolverOneShotTraining, self)
+            .forward(
+                local_embedding=fx_t.unsqueeze(0),
+                geometry=coords.unsqueeze(0),
+                local_positions=coords.unsqueeze(0),
+                global_embedding=global_embedding,
+            )
+            .squeeze(0)
+        )  # [N, T*Fo]
 
         if pred_flat.shape[-1] < T * Fo:
             raise ValueError(
                 f"Model output dim {pred_flat.shape[-1]} smaller than T*Fo={T * Fo}"
             )
         return pred_flat[:, : T * Fo].view(N, T, Fo)
+
 
 class TransolverAutoregressiveRolloutTraining(Transolver):
     """
@@ -344,7 +354,10 @@ class TransolverOneStepRollout(
         # Ground truth sequence [T+1, N, 3] (t0 + rollout steps)
         N = coords0.size(0)
         gt_seq = torch.cat(
-            [coords0.unsqueeze(0), sample.node_target.transpose(0, 1)],  # [N,T,3] -> [T,N,3]
+            [
+                coords0.unsqueeze(0),
+                sample.node_target.transpose(0, 1),
+            ],  # [N,T,3] -> [T,N,3]
             dim=0,
         )
 

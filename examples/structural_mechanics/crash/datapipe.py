@@ -75,7 +75,9 @@ class SimSample:
         if self.graph is not None:
             self.graph = self.graph.to(device)
         if self.global_features is not None:
-            self.global_features = {k: v.to(device) for k, v in self.global_features.items()}
+            self.global_features = {
+                k: v.to(device) for k, v in self.global_features.items()
+            }
         return self
 
     def is_graph(self) -> bool:
@@ -94,8 +96,16 @@ class SimSample:
             else tuple(self.node_target.shape[1:])
         )
         e = 0 if self.graph is None else self.graph.num_edges
-        gf = "" if self.global_features is None else f", global_features={list(self.global_features.keys())}"
-        ts = "" if self.target_series is None else f", target_series={list(self.target_series.keys())}"
+        gf = (
+            ""
+            if self.global_features is None
+            else f", global_features={list(self.global_features.keys())}"
+        )
+        ts = (
+            ""
+            if self.target_series is None
+            else f", target_series={list(self.target_series.keys())}"
+        )
         return f"SimSample(N={n}, keys={list(self.node_features.keys())}, Din={din}, Dout={dout}, E={e}{gf}{ts})"
 
 
@@ -155,7 +165,10 @@ class CrashBaseDataset:
 
         # Require global_features_filepath when global_features keys are configured
         if global_features and len(global_features) > 0:
-            if not global_features_filepath or not str(global_features_filepath).strip():
+            if (
+                not global_features_filepath
+                or not str(global_features_filepath).strip()
+            ):
                 raise ValueError(
                     "datapipe.global_features is configured but training.global_features_filepath "
                     "is not set or is empty. Set it via config or CLI, e.g. "
@@ -231,7 +244,9 @@ class CrashBaseDataset:
                 if dyn.ndim == 2:
                     dyn_flat = dyn.transpose(1, 0)  # [N,T]
                 else:
-                    dyn_flat = dyn.transpose(1, 0, 2).reshape(dyn.shape[1], -1)  # [N,T*C]
+                    dyn_flat = dyn.transpose(1, 0, 2).reshape(
+                        dyn.shape[1], -1
+                    )  # [N,T*C]
                 parts.append(dyn_flat)
 
             feats_np = (
@@ -248,12 +263,16 @@ class CrashBaseDataset:
                 start = 0
                 for k in self.static_features:
                     arr_k = self._get_static_feature(rec, k)
-                    width = (arr_k.shape[1] if arr_k.ndim > 1 else 1)
+                    width = arr_k.shape[1] if arr_k.ndim > 1 else 1
                     self._feature_slices[k] = (start, start + width)
                     start += width
                 for k in self.dynamic_features:
                     dyn_k = self._get_dynamic_feature(rec, k, T)
-                    width = dyn_k.shape[0] if dyn_k.ndim == 2 else dyn_k.shape[0] * dyn_k.shape[2]
+                    width = (
+                        dyn_k.shape[0]
+                        if dyn_k.ndim == 2
+                        else dyn_k.shape[0] * dyn_k.shape[2]
+                    )
                     # After flattening to [N, width]
                     self._feature_slices[k] = (start, start + width)
                     start += width
@@ -343,7 +362,7 @@ class CrashBaseDataset:
         # Build interleaved per-timestep targets: [dx, dy, dz, eps, vm, ...] per timestep
         # pos_seq[1:]: [T-1, N, 3]
         pos_rollout = pos_seq[1:]  # [T-1, N, 3]
-        
+
         if len(self.dynamic_targets) > 0:
             # Collect dynamic targets [T-1, N, C_k] for each target
             ts_rec = self.target_series_data[idx]
@@ -357,7 +376,7 @@ class CrashBaseDataset:
                 # keep steps 1..T-1 to match rollout_steps
                 series_rollout = series[1:]  # [T-1,N,C]
                 dyn_list.append(series_rollout)
-            
+
             # Concatenate along feature dim per timestep: [T-1, N, 3+sum(C_k)]
             y_per_t = torch.cat([pos_rollout] + dyn_list, dim=-1)  # [T-1, N, Fo]
         else:
@@ -495,7 +514,10 @@ class CrashBaseDataset:
             raise KeyError(f"Missing dynamic feature series for '{key}' in point_data")
 
         def natural_key(name):
-            return [int(s) if s.isdigit() else s.lower() for s in re.findall(r"\d+|\D+", name)]
+            return [
+                int(s) if s.isdigit() else s.lower()
+                for s in re.findall(r"\d+|\D+", name)
+            ]
 
         names = sorted(names, key=natural_key)
         series = [np.asarray(pd[n]) for n in names]

@@ -124,11 +124,13 @@ def load_vtp_file(vtp_path):
             or name.startswith("cell_stress_vm_")
         ]
         if cell_point_names:
+
             def natural_key(name):
                 return [
                     int(s) if s.isdigit() else s.lower()
                     for s in re.findall(r"\d+|\D+", name)
                 ]
+
             cell_point_names = sorted(cell_point_names, key=natural_key)
             for name in cell_point_names:
                 arr = np.asarray(converted.point_data[name])
@@ -186,7 +188,13 @@ def collect_mesh_pos(
     return np.stack(mesh_pos_all)
 
 
-def process_vtp_data(data_dir, num_samples=2, write_vtp=False, global_features_filepath: str | None = None, logger=None):
+def process_vtp_data(
+    data_dir,
+    num_samples=2,
+    write_vtp=False,
+    global_features_filepath: str | None = None,
+    logger=None,
+):
     """
     Preprocesses VTP crash simulation data in a given directory.
     Each .vtp file is treated as one sample. For each sample, computes edges from connectivity,
@@ -207,9 +215,7 @@ def process_vtp_data(data_dir, num_samples=2, write_vtp=False, global_features_f
 
     # Load global features
     if global_features_filepath is not None:
-        all_global_features = load_global_features(
-            global_features_filepath
-        )
+        all_global_features = load_global_features(global_features_filepath)
 
     for vtp_path in vtp_files:
         if logger:
@@ -261,8 +267,8 @@ def process_vtp_data(data_dir, num_samples=2, write_vtp=False, global_features_f
 
         processed_runs += 1
         if processed_runs >= num_samples:
-            break    
-        
+            break
+
     return srcs, dsts, point_data_all, global_features_all
 
 

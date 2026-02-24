@@ -11,7 +11,7 @@ Machine Learning (ML) surrogates provide a promising alternative by learning map
 - **Scalability** to large structural models without rerunning costly FE simulations.
 - **Flexibility** in experimenting with different model architectures (GNNs, Transformers).
 
-In this example, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, FIGConvUNet, and MeshGraphNet architectures with multiple rollout schemes. It supports multiple dataset formats including d3plot, VTP, and Zarr. The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
+In this example, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, FIGConvUNet, and MeshGraphNet architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
 
 For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201).
 
@@ -78,7 +78,7 @@ python train.py --config-name=experiment_bumper_geotransolver training.epochs=50
 ## Prerequisites
 
 This example requires:
-- Access to LS-DYNA crash datasets (with `d3plot` and `.k` keyword files).
+- LS-DYNA crash data preprocessed to VTP or Zarr via [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator).
 - A GPU-enabled environment with PyTorch.
 
 Install dependencies:
@@ -213,8 +213,7 @@ conf/
 │   └── mgn_time_conditional.yaml
 ├── reader/                                # reader configs
 │   ├── vtp.yaml
-│   ├── zarr.yaml
-│   └── d3plot.yaml
+│   └── zarr.yaml
 ├── training/default.yaml                  # generic training hyperparameters
 └── inference/default.yaml                 # generic inference options
 ```
@@ -357,7 +356,7 @@ At a high level, each sample corresponds to one crash run. The datapipe loads th
 
 Configuration lives under `conf/datapipe/`. There are two datapipe variants: one for graph-based models and one for point-cloud models. Both accept the same core options, and both expose a `features` list. The `features` list is the single source of truth for what goes into the 'features' tensor and in which order. If you do not want any features, set `features: []` and the datapipe will return an empty [N, 0] tensor for 'features' while keeping 'coords' intact. If you add more features later, the datapipe will preserve their order and update the per-dimension statistics automatically.
 
-Under the hood the datapipe reads node positions over time from LS-DYNA (via `d3plot_reader.py` or any compatible reader you configure). For each run it constructs a fixed number of time steps, selects and reindexes the active nodes, and optionally builds graph connectivity. It also computes statistics necessary for normalization. Position statistics include per-axis means and standard deviations, as well as normalized velocity and acceleration statistics used by autoregressive rollouts. Feature statistics are computed column-wise on the concatenated 'features' tensor. During dataset creation the datapipe normalizes the position trajectory using position means and standard deviations and normalizes every column of 'features' using feature means and standard deviations. The resulting tensors are numerically stable and consistent across training and evaluation. The statistics are written under `./stats/` as `node_stats.json` and `feature_stats.json` during training, and then read back in evaluation or inference.
+Under the hood the datapipe reads node positions over time via the configured reader (VTP or Zarr). For each run it constructs a fixed number of time steps, selects and reindexes the active nodes, and optionally builds graph connectivity. It also computes statistics necessary for normalization. Position statistics include per-axis means and standard deviations, as well as normalized velocity and acceleration statistics used by autoregressive rollouts. Feature statistics are computed column-wise on the concatenated 'features' tensor. During dataset creation the datapipe normalizes the position trajectory using position means and standard deviations and normalizes every column of 'features' using feature means and standard deviations. The resulting tensors are numerically stable and consistent across training and evaluation. The statistics are written under `./stats/` as `node_stats.json` and `feature_stats.json` during training, and then read back in evaluation or inference.
 
 Readers are configurable through Hydra. A reader is any callable that returns `(srcs, dsts, point_data)`, where `point_data` is a list of records—one per run. Each record must include 'coords' as a [T, N, 3] array and one array per configured feature name. Arrays for features can be [N] or [N, K]; the datapipe will promote [N] to [N, 1] and then concatenate all feature arrays in the order declared in the configuration to form 'features'. If you are using graph-based models, the `srcs` and `dsts` arrays will be used to build a PyG `Data` object with symmetric edges and self-loops, and initial edge features are computed from positions at t0 (displacements and distances). If you are using point-cloud models, graph connectivity is ignored but the remainder of the pipeline is identical.
 
@@ -405,7 +404,7 @@ Global features are stored in a single JSON file shared across all splits (train
 }
 ```
 
-**Run ID convention:** the run ID must match the **filename stem** of the corresponding data file. For the VTP reader, a file named `Run100.vtp` maps to run ID `"Run100"`. For the d3plot reader, a folder named `Run100/` maps to run ID `"Run100"`. All values must be Python-serializable floats (or ints, which are cast to float).
+**Run ID convention:** the run ID must match the **filename stem** of the corresponding data file. For the VTP reader, a file named `Run100.vtp` maps to run ID `"Run100"`. For the Zarr reader, a store named `Run100.zarr/` maps to run ID `"Run100"`. All values must be Python-serializable floats (or ints, which are cast to float).
 
 #### Configuration
 
@@ -448,13 +447,13 @@ global_dim: 3   # must match len(datapipe.global_features)
 
 If `global_features` is `null`, `sample.global_features` is `None` and the model must handle this case (currently only `GeoTransolverOneShotTraining` uses global features; other models ignore them).
 
-## Reader: built-in d3plot and vtp readers and how to add your own
+## Reader: built-in VTP and Zarr readers and how to add your own
 
-The reader is the component that actually opens the raw simulation outputs and produces the arrays the datapipe consumes. It is intentionally thin and swappable via Hydra so you can adapt the pipeline to LS‑DYNA exports, Abaqus exports, or your own internal formats without touching the rest of the code.
+The reader opens preprocessed simulation data and produces the arrays the datapipe consumes. Raw LS-DYNA d3plot files must be preprocessed to VTP or Zarr using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator) before use. The reader is swappable via Hydra so you can adapt the pipeline to different formats or add your own.
 
-### Built-in d3plot reader
+### Built-in VTP reader (PolyData)
 
-The default reader is implemented in `d3plot_reader.py`. It searches the data directory for subfolders that contain a `d3plot` file and treats each such folder as one “run.” For each run it opens the `d3plot` with `lasso.dyna.D3plot` and extracts node coordinates, time-varying displacements, element connectivity, and part identifiers. If a LS‑DYNA keyword (`.k`) file is present, it parses the shell section definitions to obtain per-part thickness values, then converts those into per-node thickness by averaging the values of incident elements. To avoid contaminating the training with rigid content, the reader classifies nodes as structural or wall based on a displacement variation threshold and drops wall nodes. After filtering, it builds a compact node index, remaps connectivity, and—if you are training a graph model—collects undirected edges from the remapped shell elements. It can optionally save one VTP file per time step to help you visually inspect the trajectories, or write the predictions to those files in inference.
+A lightweight VTP reader is provided in `vtp_reader.py`. It treats each `.vtp` file in a directory as a separate run. For each run it opens the `d3plot` with `lasso.dyna.D3plot` and extracts node coordinates, time-varying displacements, element connectivity, and part identifiers. If a LS‑DYNA keyword (`.k`) file is present, it parses the shell section definitions to obtain per-part thickness values, then converts those into per-node thickness by averaging the values of incident elements. To avoid contaminating the training with rigid content, the reader classifies nodes as structural or wall based on a displacement variation threshold and drops wall nodes. After filtering, it builds a compact node index, remaps connectivity, and—if you are training a graph model—collects undirected edges from the remapped shell elements. It can optionally save one VTP file per time step to help you visually inspect the trajectories, or write the predictions to those files in inference.
 
 The reader then assembles the per-run record expected by the datapipe. Positions are returned under the key `'coords'` as a float array of shape `[T, N, 3]`, where T is the number of time steps and N is the number of retained nodes after filtering and remapping. Feature arrays are returned one per configured feature name; for example, if your datapipe configuration lists `features: [thickness, Y_modulus]`, the reader should provide a `'thickness'` array with shape `[N]` or `[N, 1]` and a `'Y_modulus'` array with shape `[N]` or `[N, K]`. The datapipe promotes 1D arrays to 2D and concatenates all provided feature arrays in the order given by the configuration to form the final `'features'` block supplied to the model.
 
@@ -547,13 +546,8 @@ datapipe:
 **Recommended workflow:**
 1. Use PhysicsNeMo-Curator to preprocess d3plot → VTP or Zarr once
 2. Use corresponding reader for all training/validation
-3. Optionally use d3plot reader for quick prototyping on raw data
 
 ### Data layout expected by readers
-
-- d3plot reader (`d3plot_reader.py`):
-  - `<DATA_DIR>/<RUN_ID>/d3plot` (required)
-  - `<DATA_DIR>/<RUN_ID>/*.k` (optional; used to parse thickness)
 
 - VTP reader (`vtp_reader.py`):
   - `<DATA_DIR>/*.vtp` (each `.vtp` is treated as one run)

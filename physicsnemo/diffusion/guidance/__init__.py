@@ -14,13 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
+"""DPS (Diffusion Posterior Sampling) guidance for diffusion models."""
 
-from physicsnemo.core.warnings import FutureFeatureWarning
-
-warnings.warn(
-    "The 'physicsnemo.diffusion.denoisers.denoisers' module is a placeholder for "
-    "future functionality that will be implemented in an upcoming release.",
-    FutureFeatureWarning,
-    stacklevel=2,
+from .dps_guidance import (
+    DataConsistencyDPSGuidance,
+    DPSDenoiser,
+    DPSGuidance,
+    ModelConsistencyDPSGuidance,
 )
+
+__all__ = [
+    "DPSGuidance",
+    "DPSDenoiser",
+    "ModelConsistencyDPSGuidance",
+    "DataConsistencyDPSGuidance",
+]

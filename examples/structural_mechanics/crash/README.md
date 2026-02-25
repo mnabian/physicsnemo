@@ -58,13 +58,17 @@ conf/experiment_crash_transolver.yaml
    python train.py --config-name=experiment_bumper_geotransolver
 
    # Multi-GPU (DDP)
-   torchrun --standalone --nproc_per_node=4 train.py --config-name=experiment_bumper_geotransolver
+   torchrun --nproc_per_node=4 train.py --config-name=experiment_bumper_geotransolver
    ```
 
    **Inference:**
 
    ```bash
+   # Single GPU
    python inference.py --config-name=experiment_bumper_geotransolver
+
+   # Multi-GPU
+   torchrun --nproc_per_node=4 inference.py --config-name=experiment_bumper_geotransolver
    ```
 
    Predictions are saved under `output_dir_pred` (default `./predicted_vtps/`). Normalization stats are written to `./stats/` during training and reused for inference.
@@ -231,7 +235,7 @@ python train.py --config-name=experiment_bumper_geotransolver
 Multi-GPU (Distributed Data Parallel):
 
 ```bash
-torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py --config-name=experiment_bumper_geotransolver
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=experiment_bumper_geotransolver
 ```
 
 ## Inference
@@ -258,7 +262,7 @@ python inference.py --config-name=experiment_bumper_geotransolver
 Multi-GPU (Distributed Data Parallel):
 
 ```bash
-torchrun --standalone --nproc_per_node=<NUM_GPUS> inference.py --config-name=experiment_bumper_geotransolver
+torchrun --nproc_per_node=<NUM_GPUS> inference.py --config-name=experiment_bumper_geotransolver
 ```
 
 Runs are sharded across ranks: rank `r` processes `run_items[r::world_size]`.
@@ -449,7 +453,7 @@ If `global_features` is `null`, `sample.global_features` is `None` and the model
 
 ## Reader: built-in VTP and Zarr readers and how to add your own
 
-The reader opens preprocessed simulation data and produces the arrays the datapipe consumes. Raw LS-DYNA d3plot files must be preprocessed to VTP or Zarr using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator) before use. The reader is swappable via Hydra so you can adapt the pipeline to different formats or add your own.
+The reader opens preprocessed simulation data and produces the arrays the datapipe consumes. Raw LS-DYNA d3plot files must be preprocessed to VTP or Zarr using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/tree/main/examples/structural_mechanics/crash) before use. The reader is swappable via Hydra so you can adapt the pipeline to different formats or add your own.
 
 ### Built-in VTP reader (PolyData)
 
@@ -644,8 +648,8 @@ run_post_processing.sh can automate all evaluation tasks across runs.
 ## Performance tips
 
 - AMP is enabled by default in training; it reduces memory and accelerates matmuls on modern GPUs.
-- For multi-GPU training, use `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`.
-- For DDP, prefer `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`.
+- For multi-GPU training, use `torchrun --nproc_per_node=<NUM_GPUS> train.py`.
+- For DDP, prefer `torchrun --nproc_per_node=<NUM_GPUS> train.py`.
 
 ## Development tips
 

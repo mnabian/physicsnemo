@@ -359,7 +359,6 @@ class CrashBaseDataset:
         pos_t0 = pos_seq[0]  # [N,3]
         x = {"coords": pos_t0, "features": feats}
 
-        # Build interleaved per-timestep targets: [dx, dy, dz, eps, vm, ...] per timestep
         # pos_seq[1:]: [T-1, N, 3]
         pos_rollout = pos_seq[1:]  # [T-1, N, 3]
 
@@ -392,7 +391,6 @@ class CrashBaseDataset:
         assert y.shape == (N, T_out, Fo), (
             f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
         )
-        # y now includes dynamic targets interleaved per timestep
         return x, y
 
     # ---- stats helpers ----

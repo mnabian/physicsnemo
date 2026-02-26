@@ -41,9 +41,10 @@ from physicsnemo.utils import load_checkpoint, save_checkpoint
 _tabulate = OptionalImport("tabulate")
 _torchinfo = OptionalImport("torchinfo")
 
-# Import unified datapipe
+# Import unified datapipe and utils
 from datapipe import SimSample, simsample_collate
 from omegaconf import open_dict
+from utils import build_muon_optimizer
 
 
 class Trainer:
@@ -203,18 +204,12 @@ class Trainer:
         # Loss
         self.criterion = torch.nn.MSELoss()
 
-        # Optimizer
-        self.optimizer = None
-        try:
-            if cfg.training.use_apex:
-                from apex.optimizers import FusedAdam
-
-                self.optimizer = FusedAdam(
-                    self.model.parameters(), lr=cfg.training.start_lr
-                )
-        except ImportError:
-            logger0.warning("Apex not installed, falling back to Adam optimizer.")
-        if self.optimizer is None:
+        # Optimizer (adam or muon; muon requires PyTorch >= 2.9)
+        opt_name = cfg.training.get("optimizer", "adam")
+        assert opt_name in ["adam", "muon"], f"Unsupported optimizer: {opt_name}"
+        if opt_name == "muon":
+            self.optimizer = build_muon_optimizer(self.model, cfg)
+        else:
             self.optimizer = torch.optim.Adam(
                 self.model.parameters(), lr=cfg.training.start_lr
             )

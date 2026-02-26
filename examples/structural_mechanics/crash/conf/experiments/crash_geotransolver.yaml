@@ -15,10 +15,10 @@
 # limitations under the License.
 
 # Car body-in-white crash experiment using GeoTransolver (one-shot).
-# Usage: python train.py --config-name=experiment_crash_transolver
+# Usage: python train.py --config-name=experiments/crash_geotransolver
 #
 # To switch model (same dataset, different model):
-#   python train.py --config-name=experiment_crash_transolver model=transolver_time_conditional
+#   python train.py --config-name=experiments/crash_geotransolver model=geotransolver_time_conditional
 
 hydra:
   job:
@@ -31,11 +31,11 @@ experiment_desc: "Car body-in-white crash experiment using GeoTransolver"
 run_desc: "Car body-in-white crash experiment using GeoTransolver"
 
 defaults:
-  - reader: vtp
-  - datapipe: point_cloud
-  - model: geotransolver_one_shot_training
-  - training: default
-  - inference: default
+  - components/reader: vtp
+  - components/datapipe: point_cloud
+  - components/model: geotransolver_one_shot
+  - components/training: default
+  - components/inference: default
   - _self_
 
 # ┌───────────────────────────────────────────┐
@@ -46,6 +46,7 @@ training:
   raw_data_dir: ???              # set in config or via CLI: training.raw_data_dir=/path/to/train
   raw_data_dir_validation: ???   # set in config or via CLI: training.raw_data_dir_validation=/path/to/validation
   global_features_filepath: null # no per-run global scalars for this dataset
+  optimizer: muon
 
   # ┌───────────────────────────────────────────┐
   # │                 Dataset                   │

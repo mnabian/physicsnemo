@@ -14,13 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.MeshGraphNetTimeConditionalRollout
+# @package reader
+_target_: zarr_reader.Reader
 _convert_: all
-
-input_dim_nodes: 5                  # pos(3) + thickness(1) + time(1)
-input_dim_edges: 4                  # dx, dy, dz, distance
-output_dim: 3                       # next step position
-do_concat_trick: true               # Reduced memory overhead
-num_processor_checkpoint_segments: 3
-### Rollout parameters ###
-num_time_steps: ${training.num_time_steps}

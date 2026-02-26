@@ -15,10 +15,10 @@
 # limitations under the License.
 
 # Bumper beam crash experiment using GeoTransolver (autoregressive rollout).
-# Usage: python train.py --config-name=experiment_bumper_geotransolver
+# Usage: python train.py --config-name=experiments/bumper_geotransolver
 #
 # To switch models, pass model=<name> on the CLI, e.g.:
-#   python train.py --config-name=experiment_bumper_geotransolver model=geotransolver_one_shot_training
+#   python train.py --config-name=experiments/bumper_geotransolver model=geotransolver_one_shot
 
 hydra:
   job:
@@ -31,11 +31,11 @@ experiment_desc: "Bumper beam experiment using GeoTransolver"
 run_desc: "Bumper beam experiment using GeoTransolver"
 
 defaults:
-  - reader: vtp
-  - datapipe: point_cloud
-  - model: geotransolver_one_shot_training
-  - training: default
-  - inference: default
+  - components/reader: vtp
+  - components/datapipe: point_cloud
+  - components/model: geotransolver_one_shot
+  - components/training: default
+  - components/inference: default
   - _self_
 
 # ┌───────────────────────────────────────────┐
@@ -46,6 +46,7 @@ training:
   raw_data_dir: ???              # set in config or via CLI: training.raw_data_dir=/path/to/train
   raw_data_dir_validation: ???   # set in config or via CLI: training.raw_data_dir_validation=/path/to/validation
   global_features_filepath: ???  # set in config or via CLI: training.global_features_filepath=/path/to/global_features.json
+  optimizer: muon
 
   # ┌───────────────────────────────────────────┐
   # │                 Dataset                   │

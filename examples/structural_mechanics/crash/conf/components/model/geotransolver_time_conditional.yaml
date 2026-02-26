@@ -14,19 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.TransolverAutoregressiveRolloutTraining
+# @package model
+_target_: rollout.GeoTransolverTimeConditionalRollout
 _convert_: all
 
-functional_dim: 5
-embedding_dim: 3
-out_dim: 3
+functional_dim: 2   # features + time (1); override in experiment (e.g. 2 for thickness+time)
+out_dim: 3         # displacement per step
+geometry_dim: 3
+global_dim: 3       # override in experiment if no global features (e.g. global_dim: null)
 slice_num: 128
 n_layers: 6
-unified_pos: false
-structured_shape: null
 use_te: false
 time_input: false
+include_local_features: true
+
 ### Rollout parameters ###
 num_time_steps: ${training.num_time_steps}
-dt: 5e-3
-initial_vel: 9.22

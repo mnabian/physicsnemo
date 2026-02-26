@@ -211,7 +211,7 @@ class Trainer:
             self.optimizer = build_muon_optimizer(self.model, cfg)
         else:
             self.optimizer = torch.optim.Adam(
-                self.model.parameters(), lr=cfg.training.start_lr
+                self.model.parameters(), lr=cfg.training.start_lr, fused=True
             )
         logger0.info(f"Using {self.optimizer.__class__.__name__} optimizer")
 

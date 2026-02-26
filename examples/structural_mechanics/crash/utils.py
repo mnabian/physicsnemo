@@ -91,7 +91,7 @@ def build_muon_optimizer(model: torch.nn.Module, cfg) -> torch.optim.Optimizer:
                 weight_decay=weight_decay,
                 adjust_lr_fn="match_rms_adamw",
             ),
-            torch.optim.AdamW(other_params, lr=lr, weight_decay=weight_decay),
+            torch.optim.AdamW(other_params, lr=lr, weight_decay=weight_decay, betas=(0.9, 0.999), eps=1.0e-8)
         ])
     elif muon_params:
         return torch.optim.Muon(

@@ -33,6 +33,7 @@ _POS_DIM = 3  # position (x,y,z)
 # One-shot rollout models
 # =============================================================================
 
+
 def _oneshot_init(kwargs: dict, out_key: str) -> int:
     """Validate and set rollout_steps. Returns rollout_steps."""
     num_time_steps = kwargs.pop("num_time_steps")
@@ -57,11 +58,15 @@ def _oneshot_inputs(sample: SimSample, rollout_steps: int):
     return coords, features, N, T, Fo
 
 
-def _cat_global(coords: torch.Tensor, features: torch.Tensor, sample: SimSample) -> torch.Tensor:
+def _cat_global(
+    coords: torch.Tensor, features: torch.Tensor, sample: SimSample
+) -> torch.Tensor:
     """Concatenate coords, features, and global (broadcast). Returns [N, C]."""
     out = torch.cat([coords, features], dim=-1)
     if sample.global_features is not None:
-        g = torch.stack([sample.global_features[k] for k in sample.global_features], dim=0)
+        g = torch.stack(
+            [sample.global_features[k] for k in sample.global_features], dim=0
+        )
         out = torch.cat([out, g.unsqueeze(0).expand(coords.size(0), -1)], dim=-1)
     return out
 
@@ -69,8 +74,11 @@ def _cat_global(coords: torch.Tensor, features: torch.Tensor, sample: SimSample)
 def _oneshot_output(pred_flat: torch.Tensor, N: int, T: int, Fo: int) -> torch.Tensor:
     """Validate and reshape to [N, T, Fo]."""
     if pred_flat.shape[-1] < T * Fo:
-        raise ValueError(f"Model output dim {pred_flat.shape[-1]} smaller than T*Fo={T * Fo}")
+        raise ValueError(
+            f"Model output dim {pred_flat.shape[-1]} smaller than T*Fo={T * Fo}"
+        )
     return pred_flat[:, : T * Fo].view(N, T, Fo)
+
 
 def _oneshot_add_coords(pred: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
     """Add initial coords to position slice only. pred [N,T,Fo], coords [N,3]. Fo >= 3."""
@@ -91,14 +99,20 @@ class GeoTransolverOneShot(GeoTransolver):
         fx = torch.cat([coords, features], dim=-1)
         global_emb = None
         if sample.global_features is not None:
-            g = torch.stack([sample.global_features[k] for k in sample.global_features], dim=0)
+            g = torch.stack(
+                [sample.global_features[k] for k in sample.global_features], dim=0
+            )
             global_emb = g.unsqueeze(0).unsqueeze(0)  # [1, 1, G]
-        raw = super().forward(
-            local_embedding=fx.unsqueeze(0),
-            geometry=coords.unsqueeze(0),
-            local_positions=coords.unsqueeze(0),
-            global_embedding=global_emb,
-        ).squeeze(0)
+        raw = (
+            super()
+            .forward(
+                local_embedding=fx.unsqueeze(0),
+                geometry=coords.unsqueeze(0),
+                local_positions=coords.unsqueeze(0),
+                global_embedding=global_emb,
+            )
+            .squeeze(0)
+        )
         pred = _oneshot_add_coords(_oneshot_output(raw, N, T, Fo), coords)
         return pred
 
@@ -151,9 +165,11 @@ class FIGConvUNetOneShot(FIGConvUNet):
         pred = _oneshot_add_coords(_oneshot_output(raw.squeeze(0), N, T, Fo), coords)
         return pred
 
+
 # =============================================================================
 # Autoregressive rollout models
 # =============================================================================
+
 
 def _geo_global_emb(sample: SimSample):
     """Build global embedding for GeoTransolver from sample."""
@@ -240,13 +256,15 @@ class GeoTransolverAutoregressiveRolloutTraining(GeoTransolver):
 
         return torch.stack(outputs, dim=0).transpose(0, 1)  # [N,T,3]
 
+
 # =============================================================================
 # Time-conditional rollout models
 # =============================================================================
 
-class GeoTransolverTimeConditionalRollout(GeoTransolver):
+
+class GeoTransolverTimeConditional_tfeat(GeoTransolver):
     """
-    GeoTransolver model with time-conditional rollout.
+    GeoTransolver model with time-conditional rollout training.
 
     Predicts each time step independently, conditioned on normalized time.
     """
@@ -255,53 +273,69 @@ class GeoTransolverTimeConditionalRollout(GeoTransolver):
         self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
         super().__init__(*args, **kwargs)
 
-    def forward(
-        self,
-        sample: SimSample,
-        data_stats: dict,
-    ) -> torch.Tensor:
+    def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
+        if self.training:
+            return self._forward(sample, data_stats)
+        else:
+            return self._rollout(sample, data_stats)
+
+    def _forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
         """
         Args:
             sample: SimSample containing node_features and node_target
             data_stats: dict containing normalization stats
         Returns:
-            [N, T, 3] rollout of predicted positions
+            [N, Fo] prediction at time t
         """
         inputs = sample.node_features
-        x = inputs["coords"]  # [N,3]
-        features = inputs.get("features", x.new_zeros((x.size(0), 0)))  # [N,F]
-        global_emb = _geo_global_emb(sample)
-
-        outputs: list[torch.Tensor] = []
-        time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
-
-        for time in time_seq:
-            # Concatenate features with time (GeoTransolver has no time param)
-            time_expanded = time.expand(x.size(0), 1)  # [N, 1]
-            fx_t = torch.cat([features, time_expanded], dim=-1)  # [N, F+1]
-
-            def step_fn(local_emb, geometry, local_pos):
-                return super(GeoTransolverTimeConditionalRollout, self).forward(
-                    local_embedding=local_emb,
-                    geometry=geometry,
-                    local_positions=local_pos,
-                    global_embedding=global_emb,
+        coords = inputs["coords"]  # [N,3]
+        features = inputs.get("features", coords.new_zeros((coords.size(0), 0)))
+        global_embedding = None
+        if sample.global_features is not None:
+            global_embedding = (
+                torch.stack(
+                    [sample.global_features[k] for k in sample.global_features], dim=0
                 )
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )  # [1, 1, num_global]
 
-            if self.training:
-                outf = ckpt(
-                    step_fn,
-                    fx_t.unsqueeze(0),
-                    x.unsqueeze(0),
-                    x.unsqueeze(0),
-                    use_reentrant=False,
-                ).squeeze(0)
-            else:
-                outf = step_fn(
-                    fx_t.unsqueeze(0), x.unsqueeze(0), x.unsqueeze(0)
-                ).squeeze(0)
+        N, T = coords.size(0), self.rollout_steps
+        Fo = sample.node_target.shape[-1]  # 3 + sum(C_k)
 
-            y_t2 = x + outf
+        fx_t = torch.cat(
+            [coords, features, inputs["time"].unsqueeze(0).repeat(N, 1)], dim=-1
+        )  # [N, 3+F+1]
+        pred = (
+            super(GeoTransolverTimeConditional_tfeat, self)
+            .forward(
+                local_embedding=fx_t.unsqueeze(0),
+                geometry=coords.unsqueeze(0),
+                local_positions=coords.unsqueeze(0),
+                global_embedding=global_embedding,
+            )
+            .squeeze(0)
+        )  # [N, Fo]
+
+        outputs = coords + pred[:, :3]
+        outputs = torch.cat([outputs, pred[:, 3:]], dim=-1)
+
+        return outputs  # [N,3]
+
+    def _rollout(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
+        """
+        Args:
+            sample: SimSample containing node_features and node_target
+            data_stats: dict containing normalization stats
+        Returns:
+            [N, T, Fo] rollout of predicted positions
+        """
+        device = sample.node_features["coords"].device
+        outputs: list[torch.Tensor] = []
+        for t in range(self.rollout_steps):
+            time = torch.tensor(t / self.rollout_steps, device=device)
+            sample.node_features["time"] = time
+            y_t2 = self._forward(sample, data_stats)
             outputs.append(y_t2)
 
         return torch.stack(outputs, dim=0).transpose(0, 1)  # [N,T,3]
@@ -310,6 +344,7 @@ class GeoTransolverTimeConditionalRollout(GeoTransolver):
 # =============================================================================
 # One-step rollout models
 # =============================================================================
+
 
 class GeoTransolverOneStepRollout(GeoTransolver):
     """

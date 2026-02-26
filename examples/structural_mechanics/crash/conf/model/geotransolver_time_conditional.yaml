@@ -14,11 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.GeoTransolverTimeConditionalRollout
+_target_: rollout.GeoTransolverTimeConditional_tfeat
 _convert_: all
 
-functional_dim: 2   # features + time (1); override in experiment (e.g. 2 for thickness+time)
-out_dim: 3         # displacement per step
+functional_dim: 4   # features + time (1); override in experiment (e.g. 2 for thickness+time)
+out_dim: 5         # displacement per step
 geometry_dim: 3
 global_dim: 3       # override in experiment if no global features (e.g. global_dim: null)
 slice_num: 128

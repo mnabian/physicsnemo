@@ -86,6 +86,10 @@ class Trainer:
             reader=reader,
             split="train",
             logger=logger0,
+            # TODO: Rethink: Make this more general
+            sample_type="transition"
+            if "TimeConditional" in cfg.model._target_
+            else "trajectory",
         )
         logging.getLogger().setLevel(logging.INFO)
         # Move stats to device

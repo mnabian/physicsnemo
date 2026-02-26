@@ -65,7 +65,7 @@ datapipe:
   global_features: null
 
 # ┌───────────────────────────────────────────┐
-# │            Model overrides                 │
+# │            Model overrides                │
 # └───────────────────────────────────────────┘
 
 model:

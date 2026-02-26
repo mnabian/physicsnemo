@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Car body-in-white crash experiment using GeoFLARE (one-shot).
-# Usage: python train.py --config-name=experiments/crash_geoflare
+# Car body-in-white crash experiment using GeoTransolver (one-shot).
+# Usage: python train.py --config-name=crash_geotransolver
 
 hydra:
   job:
@@ -23,14 +23,14 @@ hydra:
   run:
     dir: ./outputs/
 
-experiment_name: "Car-Crash-GeoFLARE"
+experiment_name: "Car-Crash-GeoTransolver"
 
 defaults:
-  - components/reader: vtp
-  - components/datapipe: point_cloud
-  - components/model: geotransolver_one_shot
-  - components/training: default
-  - components/inference: default
+  - reader: vtp
+  - datapipe: point_cloud
+  - model: geotransolver_one_shot
+  - training: default
+  - inference: default
   - _self_
 
 # ┌───────────────────────────────────────────┐
@@ -70,6 +70,5 @@ datapipe:
 
 model:
   functional_dim: 4   # coords (3) + thickness (1)
-  out_dim: 75         # (num_time_steps - 1) * 3 = 25 * 3
+  out_dim: 75        # (num_time_steps - 1) * 3 = 25 * 3
   global_dim: null    # no global features for this dataset
-  attention_type: "GALE_FE"  # GALE for GeoTransolver, GALE_FE for GeoFLARE

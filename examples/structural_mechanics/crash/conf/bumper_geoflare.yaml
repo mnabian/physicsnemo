@@ -15,8 +15,9 @@
 # limitations under the License.
 
 # Bumper beam crash experiment using GeoFLARE (one-shot).
-# Usage: python train.py --config-name=experiments/bumper_geoflare
+# Usage: python train.py --config-name=bumper_geoflare
 
+# @package _global_
 hydra:
   job:
     chdir: True
@@ -26,11 +27,11 @@ hydra:
 experiment_name: "Bumper-GeoFLARE"
 
 defaults:
-  - components/reader: vtp
-  - components/datapipe: point_cloud
-  - components/model: geotransolver_one_shot
-  - components/training: default
-  - components/inference: default
+  - reader: vtp
+  - datapipe: point_cloud
+  - model: geotransolver_one_shot
+  - training: default
+  - inference: default
   - _self_
 
 # ┌───────────────────────────────────────────┐

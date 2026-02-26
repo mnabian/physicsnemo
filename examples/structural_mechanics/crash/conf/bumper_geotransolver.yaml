@@ -14,11 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Bumper beam crash experiment using GeoTransolver (autoregressive rollout).
-# Usage: python train.py --config-name=experiments/bumper_geotransolver
-#
-# To switch models, pass model=<name> on the CLI, e.g.:
-#   python train.py --config-name=experiments/bumper_geotransolver model=geotransolver_one_shot
+# Bumper beam crash experiment using GeoTransolver (one-shot).
+# Usage: python train.py --config-name=bumper_geotransolver
 
 hydra:
   job:
@@ -27,15 +24,13 @@ hydra:
     dir: ./outputs/
 
 experiment_name: "Bumper-GeoTransolver"
-experiment_desc: "Bumper beam experiment using GeoTransolver"
-run_desc: "Bumper beam experiment using GeoTransolver"
 
 defaults:
-  - components/reader: vtp
-  - components/datapipe: point_cloud
-  - components/model: geotransolver_one_shot
-  - components/training: default
-  - components/inference: default
+  - reader: vtp
+  - datapipe: point_cloud
+  - model: geotransolver_one_shot
+  - training: default
+  - inference: default
   - _self_
 
 # ┌───────────────────────────────────────────┐

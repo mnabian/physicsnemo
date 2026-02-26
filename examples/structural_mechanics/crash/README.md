@@ -38,13 +38,13 @@ For an in-depth comparison between the Transolver and MeshGraphNet models and th
 
 ## Quickstart
 
-This pipeline uses **Hydra configs** to manage different datasets, models, and feature sets from a single codebase. Each experiment is a self-contained config file in `conf/experiments/`.
+This pipeline uses **Hydra configs** to manage different datasets, models, and feature sets from a single codebase. Each experiment is a self-contained config file in `conf/`.
 
 1) Pick or create an experiment config. Ready-to-use configs are provided:
 
 ```
-conf/experiments/bumper_geotransolver.yaml
-conf/experiments/crash_geotransolver.yaml
+conf/bumper_geotransolver.yaml
+conf/crash_geotransolver.yaml
 ```
 
 2) Preprocess your data (see [Data Preprocessing](#data-preprocessing) below).
@@ -55,20 +55,20 @@ conf/experiments/crash_geotransolver.yaml
 
    ```bash
    # Single GPU
-   python train.py --config-name=experiments/bumper_geotransolver
+   python train.py --config-name=bumper_geotransolver
 
    # Multi-GPU (DDP)
-   torchrun --nproc_per_node=4 train.py --config-name=experiments/bumper_geotransolver
+   torchrun --nproc_per_node=4 train.py --config-name=bumper_geotransolver
    ```
 
    **Inference:**
 
    ```bash
    # Single GPU
-   python inference.py --config-name=experiments/bumper_geotransolver
+   python inference.py --config-name=bumper_geotransolver
 
    # Multi-GPU
-   torchrun --nproc_per_node=4 inference.py --config-name=experiments/bumper_geotransolver
+   torchrun --nproc_per_node=4 inference.py --config-name=bumper_geotransolver
    ```
 
    Predictions are saved under `output_dir_pred` (default `./predicted_vtps/`). Normalization stats are written to `./stats/` during training and reused for inference.
@@ -76,7 +76,7 @@ conf/experiments/crash_geotransolver.yaml
 You can override any individual config value on the command line without editing any file:
 
 ```bash
-python train.py --config-name=experiments/bumper_geotransolver training.epochs=500 training.start_lr=1e-3 training.optimizer=muon
+python train.py --config-name=bumper_geotransolver training.epochs=500 training.start_lr=1e-3 training.optimizer=muon
 ```
 
 ## Prerequisites
@@ -199,23 +199,22 @@ The main script is `train.py`.
 
 ```
 conf/
-├── experiments/                           # ← self-contained experiment configs
-│   ├── bumper_geotransolver.yaml
-│   └── crash_geotransolver.yaml
+├── bumper_geotransolver.yaml              # ← self-contained experiment configs
+├── crash_geotransolver.yaml
+├── bumper_geoflare.yaml
+├── crash_geoflare.yaml
 ├── datapipe/                              # dataset configs (generic defaults)
 │   ├── graph.yaml
 │   └── point_cloud.yaml
 ├── model/                                 # model configs
 │   ├── geotransolver_one_shot.yaml
-│   ├── transolver_autoregressive_rollout_training.yaml
-│   ├── transolver_one_step_rollout.yaml
-│   ├── transolver_time_conditional.yaml
-│   ├── figconvunet_autoregressive_rollout_training.yaml
-│   ├── figconvunet_one_step_rollout.yaml
-│   ├── figconvunet_time_conditional.yaml
-│   ├── mgn_autoregressive_rollout_training.yaml
-│   ├── mgn_one_step_rollout.yaml
-│   └── mgn_time_conditional.yaml
+│   ├── geotransolver_autoregressive_rollout_training.yaml
+│   ├── geotransolver_one_step_rollout.yaml
+│   ├── geotransolver_time_conditional.yaml
+│   ├── transolver_one_shot.yaml
+│   ├── figconvunet_one_shot.yaml
+│   ├── mgn_one_shot.yaml
+│   └── ...
 ├── reader/                                # reader configs
 │   ├── vtp.yaml
 │   └── zarr.yaml
@@ -230,13 +229,13 @@ Each experiment config is self-contained with its own defaults for reader, datap
 Single GPU:
 
 ```bash
-python train.py --config-name=experiments/bumper_geotransolver
+python train.py --config-name=bumper_geotransolver
 ```
 
 Multi-GPU (Distributed Data Parallel):
 
 ```bash
-torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=experiments/bumper_geotransolver
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=bumper_geotransolver
 ```
 
 ## Inference
@@ -257,13 +256,13 @@ data/
 Single GPU:
 
 ```bash
-python inference.py --config-name=experiments/bumper_geotransolver
+python inference.py --config-name=bumper_geotransolver
 ```
 
 Multi-GPU (Distributed Data Parallel):
 
 ```bash
-torchrun --nproc_per_node=<NUM_GPUS> inference.py --config-name=experiments/bumper_geotransolver
+torchrun --nproc_per_node=<NUM_GPUS> inference.py --config-name=bumper_geotransolver
 ```
 
 Runs are sharded across ranks: rank `r` processes `run_items[r::world_size]`.
@@ -271,14 +270,14 @@ Predicted meshes are written as .vtp files under `./predicted_vtps/`, and can be
 
 ## Experiments
 
-Each experiment is a self-contained YAML file in `conf/experiments/`. Each config file includes all defaults and experiment-specific settings.
+Each experiment is a self-contained YAML file in `conf/`. Each config file includes all defaults and experiment-specific settings.
 
 ### Anatomy of an experiment config
 
 Data paths must be set either in the config file or via CLI overrides. For training: `raw_data_dir`, `raw_data_dir_validation`. For inference: `raw_data_dir_test`. Use `???` in the config to make them mandatory overrides, or set concrete paths directly.
 
 ```yaml
-# conf/experiments/my_experiment.yaml
+# conf/my_experiment.yaml
 
 hydra:
   job:
@@ -332,24 +331,26 @@ datapipe:
 
 | File | Dataset | Model | Launch command |
 |------|---------|-------|----------------|
-| `bumper_geotransolver.yaml` | Bumper beam (VTP) | GeoTransolver one-shot | `python train.py --config-name=experiments/bumper_geotransolver` |
-| `crash_geotransolver.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=experiments/crash_geotransolver` |
+| `bumper_geotransolver.yaml` | Bumper beam (VTP) | GeoTransolver one-shot | `python train.py --config-name=bumper_geotransolver` |
+| `crash_geotransolver.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=crash_geotransolver` |
+| `bumper_geoflare.yaml` | Bumper beam (VTP) | GeoFLARE one-shot | `python train.py --config-name=bumper_geoflare` |
+| `crash_geoflare.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=crash_geoflare` |
 
 ### Adding a new experiment
 
-1. Create `conf/experiments/<my_experiment>.yaml` following the template above.
+1. Create `conf/<my_experiment>.yaml` following the template above.
 2. Set defaults for reader, datapipe, model, training, and inference in the `defaults` section.
 3. Set all required fields: `raw_data_dir`, `raw_data_dir_validation` (training), `raw_data_dir_test` (inference), `num_time_steps`, `num_training_samples`. Either set concrete paths in the config or use `???` and pass them via CLI when launching `train.py` or `inference.py` as appropriate.
 4. If using global features, set `global_features_filepath`; otherwise use `null`.
 5. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it in the defaults.
-6. Run: `python train.py --config-name=experiments/<my_experiment>`
+6. Run: `python train.py --config-name=<my_experiment>`
 
-You can also override lower-level defaults in the `defaults` section:
+You can also override the model in the `defaults` section:
 ```yaml
 defaults:
   - reader: vtp
-  - override /model: transolver_time_conditional  # Override model
-  - override /training: default
+  - model: geotransolver_time_conditional  # Override model
+  - training: default
   - _self_
 ```
 
@@ -416,7 +417,7 @@ Global features are stored in a single JSON file shared across all splits (train
 Point to the JSON file and declare which keys to use in your experiment config. Set `global_features_filepath` in the config file or via CLI (`training.global_features_filepath=/path/to/global_features.json`):
 
 ```yaml
-# conf/experiments/my_experiment.yaml
+# conf/my_experiment.yaml
 training:
   global_features_filepath: ???  # or a concrete path
 
@@ -446,7 +447,7 @@ sample.global_features = {
 In the model forward pass, these are stacked into a single global embedding vector and passed to the network. The **`global_dim`** parameter in the model config must equal the number of global features selected:
 
 ```yaml
-# conf/model/geotransolver_one_shot.yaml
+# conf/model/geotransolver_one_shot.yaml (or in experiment model overrides)
 global_dim: 3   # must match len(datapipe.global_features)
 ```
 
@@ -486,11 +487,11 @@ _target_: vtp_reader.Reader
 Select it in your experiment config defaults:
 
 ```yaml
-# conf/experiments/my_experiment.yaml
+# conf/my_experiment.yaml
 defaults:
   - reader: vtp
   - datapipe: point_cloud
-  - model: transolver_time_conditional
+  - model: geotransolver_one_shot
   - training: default
   - inference: default
   - _self_
@@ -499,7 +500,7 @@ defaults:
 And configure features in the experiment's `datapipe` block:
 
 ```yaml
-# conf/experiments/my_experiment.yaml
+# conf/my_experiment.yaml
 datapipe:
   static_features: [thickness]  # or [] for no features
 ```
@@ -530,11 +531,11 @@ _target_: zarr_reader.Reader
 Select it in your experiment config defaults:
 
 ```yaml
-# conf/experiments/my_experiment.yaml
+# conf/my_experiment.yaml
 defaults:
   - reader: zarr
   - datapipe: point_cloud
-  - model: transolver_autoregressive_rollout_training
+  - model: geotransolver_one_shot
   - training: default
   - inference: default
   - _self_
@@ -543,7 +544,7 @@ defaults:
 And configure features in the experiment's `datapipe` block:
 
 ```yaml
-# conf/experiments/my_experiment.yaml
+# conf/my_experiment.yaml
 datapipe:
   static_features: [thickness]  # Must match fields stored in Zarr
 ```
@@ -566,7 +567,7 @@ datapipe:
 
 To write your own reader, implement a Hydra‑instantiable function or class whose call returns a three‑tuple `(srcs, dsts, point_data)`. The first two entries are lists of integer arrays describing edges per run (they can be empty lists if you are not producing a graph), and `point_data` is a list of Python dicts with one dict per run. Each dict must contain `'coords'` as a `[T, N, 3]` array and one array per feature name listed in `conf/datapipe/*.yaml` under `features`. Feature arrays can be `[N]` or `[N, K]` and should use the same node indexing as `'coords'`. For convenience, a simple class reader can accept the Hydra `split` argument (e.g., "train" or "test") and decide whether to save VTP frames, but this is optional.
 
-As a starting point, your YAML can point to a class by dotted path. For a class:
+As a starting point, your YAML can point to a class by dotted path:
 
 ```yaml
 # conf/reader/my_reader.yaml

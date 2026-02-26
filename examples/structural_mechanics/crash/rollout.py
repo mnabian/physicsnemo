@@ -26,6 +26,8 @@ from datapipe import SimSample
 
 EPS = 1e-8
 _FO_MIN = 3  # position-only; with dynamic_targets can be larger
+_POS_DIM = 3  # position (x,y,z)
+
 
 # =============================================================================
 # One-shot rollout models
@@ -70,6 +72,12 @@ def _oneshot_output(pred_flat: torch.Tensor, N: int, T: int, Fo: int) -> torch.T
         raise ValueError(f"Model output dim {pred_flat.shape[-1]} smaller than T*Fo={T * Fo}")
     return pred_flat[:, : T * Fo].view(N, T, Fo)
 
+def _oneshot_add_coords(pred: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
+    """Add initial coords to position slice only. pred [N,T,Fo], coords [N,3]. Fo >= 3."""
+    pred = pred.clone()
+    pred[:, :, :_POS_DIM] += coords.unsqueeze(1)  # [N,1,3] broadcasts to [N,T,3]
+    return pred
+
 
 class GeoTransolverOneShot(GeoTransolver):
     """GeoTransolver model with one-shot training."""
@@ -91,7 +99,7 @@ class GeoTransolverOneShot(GeoTransolver):
             local_positions=coords.unsqueeze(0),
             global_embedding=global_emb,
         ).squeeze(0)
-        pred = _oneshot_output(raw, N, T, Fo) + coords.unsqueeze(1)
+        pred = _oneshot_add_coords(_oneshot_output(raw, N, T, Fo), coords)
         return pred
 
 
@@ -106,7 +114,7 @@ class TransolverOneShot(Transolver):
         coords, features, N, T, Fo = _oneshot_inputs(sample, self.rollout_steps)
         fx = _cat_global(coords, features, sample).unsqueeze(0)
         raw = super().forward(fx=fx, embedding=coords.unsqueeze(0)).squeeze(0)
-        pred = _oneshot_output(raw, N, T, Fo) + coords.unsqueeze(1)
+        pred = _oneshot_add_coords(_oneshot_output(raw, N, T, Fo), coords)
         return pred
 
 
@@ -125,7 +133,7 @@ class MeshGraphNetOneShot(MeshGraphNet):
             edge_features=sample.graph.edge_attr,
             graph=sample.graph,
         )
-        pred = _oneshot_output(raw, N, T, Fo) + coords.unsqueeze(1)
+        pred = _oneshot_add_coords(_oneshot_output(raw, N, T, Fo), coords)
         return pred
 
 
@@ -140,7 +148,7 @@ class FIGConvUNetOneShot(FIGConvUNet):
         coords, features, N, T, Fo = _oneshot_inputs(sample, self.rollout_steps)
         feat = _cat_global(coords, features, sample).unsqueeze(0)  # [1, N, C]
         raw, _ = super().forward(vertices=coords.unsqueeze(0), features=feat)
-        pred = _oneshot_output(raw.squeeze(0), N, T, Fo) + coords.unsqueeze(1)
+        pred = _oneshot_add_coords(_oneshot_output(raw.squeeze(0), N, T, Fo), coords)
         return pred
 
 # =============================================================================

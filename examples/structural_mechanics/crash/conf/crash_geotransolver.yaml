@@ -49,7 +49,7 @@ training:
 
   num_time_steps: 26
   num_training_samples: 135
-  num_validation_samples: 15
+  num_validation_samples: 8
 
 inference:
   raw_data_dir_test: ???         # set in config or via CLI: inference.raw_data_dir_test=/path/to/test

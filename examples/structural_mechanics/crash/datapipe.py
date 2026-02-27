@@ -647,12 +647,17 @@ class CrashGraphDataset(CrashBaseDataset):
             }
         else:
             gf = None
+        # For one_time_step (time_idx is not None): pass target_series=None to avoid moving
+        # full [T,N,C] tensors to device. target_series is only used at inference (to slice
+        # stress/strain from pred); training uses node_target only. Inference always uses
+        # all_time_steps, so it never receives one_time_step samples.
+        ts = None if time_idx is not None else self.target_series_data[batch_idx]
         return SimSample(
             node_features=x,
             node_target=y,
             graph=g,
             global_features=gf,
-            target_series=self.target_series_data[batch_idx],
+            target_series=ts,
         )
 
     # ----- graph-specific helpers (use _pyg_data / _pyg_utils so PyG loads only when used) -----
@@ -727,11 +732,16 @@ class CrashPointCloudDataset(CrashBaseDataset):
             }
         else:
             gf = None
+        # For one_time_step (time_idx is not None): pass target_series=None to avoid moving
+        # full [T,N,C] tensors to device. target_series is only used at inference (to slice
+        # stress/strain from pred); training uses node_target only. Inference always uses
+        # all_time_steps, so it never receives one_time_step samples.
+        ts = None if time_idx is not None else self.target_series_data[batch_idx]
         return SimSample(
             node_features=x,
             node_target=y,
             global_features=gf,
-            target_series=self.target_series_data[batch_idx],
+            target_series=ts,
         )
 
 

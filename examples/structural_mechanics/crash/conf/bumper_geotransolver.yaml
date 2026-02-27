@@ -67,7 +67,7 @@ datapipe:
     - velocity_x
     - thickness_scale
     - rwall_origin_y
-
+  sample_type: all_time_steps
 # ┌───────────────────────────────────────────┐
 # │            Model overrides                │
 # └───────────────────────────────────────────┘

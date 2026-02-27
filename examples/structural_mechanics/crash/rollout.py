@@ -262,7 +262,7 @@ class GeoTransolverAutoregressiveRolloutTraining(GeoTransolver):
 # =============================================================================
 
 
-class GeoTransolverTimeConditional_tfeat(GeoTransolver):
+class GeoTransolverTimeConditional(GeoTransolver):
     """
     GeoTransolver model with time-conditional rollout training.
 
@@ -307,7 +307,7 @@ class GeoTransolverTimeConditional_tfeat(GeoTransolver):
             [coords, features, inputs["time"].unsqueeze(0).repeat(N, 1)], dim=-1
         )  # [N, 3+F+1]
         pred = (
-            super(GeoTransolverTimeConditional_tfeat, self)
+            super(GeoTransolverTimeConditional, self)
             .forward(
                 local_embedding=fx_t.unsqueeze(0),
                 geometry=coords.unsqueeze(0),

@@ -135,7 +135,7 @@ class CrashBaseDataset:
         dynamic_targets: Optional[list[str]] = None,
         logger=None,
         dt: float = 5e-3,
-        sample_type: str = "trajectory",
+        sample_type: str = "all_time_steps",
     ):
         super().__init__()
         self.name = name
@@ -153,10 +153,19 @@ class CrashBaseDataset:
         self.dt = dt
         self.sample_type = sample_type
 
-        if sample_type not in ["trajectory", "transition"]:
+        if sample_type not in ["all_time_steps", "one_time_step"]:
             raise ValueError(
-                f"Invalid sample type: {sample_type} Expected 'trajectory' or 'transition'"
+                f"Invalid sample type: {sample_type} Expected 'all_time_steps' or 'one_time_step'"
             )
+
+        # Precompute batch_idx logic
+        rollout_steps = num_steps - 1
+        if sample_type == "one_time_step":
+            self._max_idx = num_samples * rollout_steps
+            self._resolve_idx = lambda idx: (idx // rollout_steps, idx % rollout_steps)
+        else:
+            self._max_idx = num_samples
+            self._resolve_idx = lambda idx: (idx, None)
 
         self.logger.info(
             f"[{self.__class__.__name__}] Preparing the {split} dataset..."
@@ -334,42 +343,35 @@ class CrashBaseDataset:
                 ) / (std.view(1, -1) + EPS)
 
     def __len__(self):
-        if self.sample_type == "trajectory":
-            return self.length
-        elif self.sample_type == "transition":
-            return self.length * (self.num_steps - 1)
+        return self._max_idx
 
     def _xy_shapes(self, idx: int) -> tuple[int, int]:
-        T, N, _ = self.mesh_pos_seq[idx].shape
-        F = self.node_features_data[idx].shape[1]
+        batch_idx, _ = self._resolve_idx(idx)
+        T, N, _ = self.mesh_pos_seq[batch_idx].shape
+        F = self.node_features_data[batch_idx].shape[1]
         Din = 3 + F
         Fo = 3  # position dims per timestep
         if len(self.dynamic_targets) > 0:
-            ts_rec = self.target_series_data[idx]
+            ts_rec = self.target_series_data[batch_idx]
             for k in self.dynamic_targets:
                 series = ts_rec[k]
                 Fo += 1 if series.ndim == 2 else series.shape[-1]
         Dout = (T - 1) * Fo
         return Din, Dout
 
-    # Common x/y construction used by both datasets
-    def build_xy(self, idx: int):
+    # Common x/y construction
+    def build_xy(self, batch_idx: int, time_idx: int | None):
         """
         x: dict with:
             - 'coords': [N, 3] at t0
             - 'features': [N, F] concatenated (static + flattened dynamic)
         y: [N, T, Fo] where T=rollout steps, Fo=3+sum(C_k) per timestep
         """
-        if self.sample_type == "trajectory":
-            assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
-            batch_idx = idx
-        elif self.sample_type == "transition":
-            assert 0 <= idx < self.num_samples * (self.num_steps - 1), (
-                f"Index {idx} out of range"
+        assert 0 <= batch_idx < self.num_samples, f"batch_idx {batch_idx} out of range"
+        if time_idx is not None:
+            assert 0 <= time_idx < self.num_steps - 1, (
+                f"time_idx {time_idx} out of range [0, {self.num_steps - 1})"
             )
-            batch_idx = idx // (self.num_steps - 1)
-            time_idx = idx % (self.num_steps - 1)
-
         pos_seq = self.mesh_pos_seq[batch_idx]  # [T,N,3]
         feats = self.node_features_data[batch_idx]  # [N,F]
         T, N, _ = pos_seq.shape
@@ -405,7 +407,7 @@ class CrashBaseDataset:
         # [N, T, Fo] where T = rollout steps
         y = y_per_t.transpose(0, 1)  # [N, T-1, Fo]
 
-        if self.sample_type == "transition":
+        if time_idx is not None:
             x["time"] = torch.tensor(time_idx / (self.num_steps - 1))
             y = y[:, time_idx]
 
@@ -634,13 +636,14 @@ class CrashGraphDataset(CrashBaseDataset):
             )
 
     def __getitem__(self, idx: int):
-        assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
-        g = self.graphs[idx]
-        x, y = self.build_xy(idx)
+        assert 0 <= idx < self._max_idx, f"Index {idx} out of range"
+        batch_idx, time_idx = self._resolve_idx(idx)
+        g = self.graphs[batch_idx]
+        x, y = self.build_xy(batch_idx, time_idx)
         if self.global_features is not None:
             gf = {
                 k: torch.tensor(v, dtype=torch.float32)
-                for k, v in self.global_features[idx].items()
+                for k, v in self.global_features[batch_idx].items()
             }
         else:
             gf = None
@@ -649,7 +652,7 @@ class CrashGraphDataset(CrashBaseDataset):
             node_target=y,
             graph=g,
             global_features=gf,
-            target_series=self.target_series_data[idx],
+            target_series=self.target_series_data[batch_idx],
         )
 
     # ----- graph-specific helpers (use _pyg_data / _pyg_utils so PyG loads only when used) -----
@@ -714,12 +717,9 @@ class CrashPointCloudDataset(CrashBaseDataset):
         self.edge_stats: dict[str, Any] = {}
 
     def __getitem__(self, idx: int):
-        x, y = self.build_xy(idx)
-        if self.sample_type == "transition":
-            batch_idx = idx // (self.num_steps - 1)
-            # time_idx = idx % (self.num_steps - 1)
-        else:
-            batch_idx = idx
+        assert 0 <= idx < self._max_idx, f"Index {idx} out of range"
+        batch_idx, time_idx = self._resolve_idx(idx)
+        x, y = self.build_xy(batch_idx, time_idx)
         if self.global_features is not None:
             gf = {
                 k: torch.tensor(v, dtype=torch.float32)

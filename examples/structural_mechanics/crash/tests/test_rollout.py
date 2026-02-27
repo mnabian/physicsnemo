@@ -81,13 +81,21 @@ def stub_parent_classes(monkeypatch):
         torch.nn.Module.__init__(self)
 
     def geotransolver_forward(
-        self, local_embedding=None, geometry=None, local_positions=None, global_embedding=None
+        self,
+        local_embedding=None,
+        geometry=None,
+        local_positions=None,
+        global_embedding=None,
     ):
         assert geometry is not None
         return torch.zeros_like(geometry)
 
-    monkeypatch.setattr(rollout.GeoTransolver, "__init__", geotransolver_init, raising=True)
-    monkeypatch.setattr(rollout.GeoTransolver, "forward", geotransolver_forward, raising=True)
+    monkeypatch.setattr(
+        rollout.GeoTransolver, "__init__", geotransolver_init, raising=True
+    )
+    monkeypatch.setattr(
+        rollout.GeoTransolver, "forward", geotransolver_forward, raising=True
+    )
 
     # Stub MeshGraphNet.__init__ and MeshGraphNet.forward
     def mgn_init(self, *args, **kwargs):

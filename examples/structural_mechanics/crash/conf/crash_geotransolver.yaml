@@ -63,6 +63,7 @@ datapipe:
     - thickness     # per-node thickness read from the VTP/d3plot files
   dynamic_targets: []   # position-only targets; no extra per-node time series
   global_features: null
+  sample_type: all_time_steps
 
 # ┌───────────────────────────────────────────┐
 # │            Model overrides                │

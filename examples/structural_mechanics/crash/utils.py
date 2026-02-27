@@ -84,15 +84,23 @@ def build_muon_optimizer(model: torch.nn.Module, cfg) -> torch.optim.Optimizer:
     weight_decay = cfg.training.get("optimizer_weight_decay", 1e-4)
     lr = cfg.training.start_lr
     if muon_params and other_params:
-        return CombinedOptimizer([
-            torch.optim.Muon(
-                muon_params,
-                lr=lr,
-                weight_decay=weight_decay,
-                adjust_lr_fn="match_rms_adamw",
-            ),
-            torch.optim.AdamW(other_params, lr=lr, weight_decay=weight_decay, betas=(0.9, 0.999), eps=1.0e-8)
-        ])
+        return CombinedOptimizer(
+            [
+                torch.optim.Muon(
+                    muon_params,
+                    lr=lr,
+                    weight_decay=weight_decay,
+                    adjust_lr_fn="match_rms_adamw",
+                ),
+                torch.optim.AdamW(
+                    other_params,
+                    lr=lr,
+                    weight_decay=weight_decay,
+                    betas=(0.9, 0.999),
+                    eps=1.0e-8,
+                ),
+            ]
+        )
     elif muon_params:
         return torch.optim.Muon(
             muon_params,
@@ -101,6 +109,4 @@ def build_muon_optimizer(model: torch.nn.Module, cfg) -> torch.optim.Optimizer:
             adjust_lr_fn="match_rms_adamw",
         )
     else:
-        return torch.optim.AdamW(
-            other_params, lr=lr, weight_decay=weight_decay
-        )
+        return torch.optim.AdamW(other_params, lr=lr, weight_decay=weight_decay)

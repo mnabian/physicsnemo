@@ -48,7 +48,7 @@ training:
   # └───────────────────────────────────────────┘
 
   num_time_steps: 26
-  num_training_samples: 136
+  num_training_samples: 135
   num_validation_samples: 15
 
 inference:

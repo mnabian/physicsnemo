@@ -345,20 +345,6 @@ class CrashBaseDataset:
     def __len__(self):
         return self._max_idx
 
-    def _xy_shapes(self, idx: int) -> tuple[int, int]:
-        batch_idx, _ = self._resolve_idx(idx)
-        T, N, _ = self.mesh_pos_seq[batch_idx].shape
-        F = self.node_features_data[batch_idx].shape[1]
-        Din = 3 + F
-        Fo = 3  # position dims per timestep
-        if len(self.dynamic_targets) > 0:
-            ts_rec = self.target_series_data[batch_idx]
-            for k in self.dynamic_targets:
-                series = ts_rec[k]
-                Fo += 1 if series.ndim == 2 else series.shape[-1]
-        Dout = (T - 1) * Fo
-        return Din, Dout
-
     # Common x/y construction
     def build_xy(self, batch_idx: int, time_idx: int | None):
         """

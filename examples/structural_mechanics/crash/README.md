@@ -266,6 +266,7 @@ datapipe:
     - velocity_x
     - thickness_scale
     - rwall_origin_y
+  sample_type: all_time_steps  # or one_time_step for time-conditional models
 ```
 
 ### Provided experiments
@@ -278,14 +279,28 @@ datapipe:
 | `bumper_geoflare_oneshot.yaml` | Bumper beam (VTP) | GeoFLARE one-shot | `python train.py --config-name=bumper_geoflare_oneshot` |
 | `crash_geoflare_oneshot.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=crash_geoflare_oneshot` |
 
+### Choosing a time scheme
+
+Two rollout schemes are supported, selected by the experiment config (model + datapipe):
+
+| Scheme | Model | Datapipe `sample_type` | Behavior |
+|--------|-------|------------------------|----------|
+| **One-shot** | `geotransolver_one_shot` | `all_time_steps` | One sample per run. Model predicts the full trajectory `[N, T-1, Fo]` from t0 in a single forward pass. Lower training cost, competitive accuracy. |
+| **Time-conditional** | `geotransolver_time_conditional` | `one_time_step` | One sample per run per timestep. Model predicts a single step `[N, Fo]` conditioned on normalized time `t/(T-1)`. Best accuracy for long horizons; higher training cost. Inference always rolls out the full trajectory. |
+
+Use **one-shot** when you need fast iteration or have limited compute. Use **time-conditional** when validation quality matters most. See [Development tips](#development-tips) for a comparison table.
+
+Two additional schemes are available in the rollout (`geotransolver_autoregressive_rollout_training`, `geotransolver_one_step_rollout`) but are not provided as premade experiment configs. You can enable them by selecting the corresponding model in `conf/model/` and configuring the datapipe accordingly.
+
 ### Adding a new experiment
 
 1. Create `conf/<my_experiment>.yaml` following the template above.
 2. Set defaults for reader, datapipe, model, training, and inference in the `defaults` section.
 3. Set all required fields: `raw_data_dir`, `raw_data_dir_validation` (training), `raw_data_dir_test` (inference), `num_time_steps`, `num_training_samples`. Either set concrete paths in the config or use `???` and pass them via CLI when launching `train.py` or `inference.py` as appropriate.
-4. If using global features, set `global_features_filepath`; otherwise use `null`.
-5. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it in the defaults.
-6. Run: `python train.py --config-name=<my_experiment>`
+4. Set `datapipe.sample_type` to match your model: `all_time_steps` for one-shot, `one_time_step` for time-conditional.
+5. If using global features, set `global_features_filepath`; otherwise use `null`.
+6. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it in the defaults.
+7. Run: `python train.py --config-name=<my_experiment>`
 
 You can also override the model in the `defaults` section. For time-conditional training, use the dedicated experiment config:
 ```yaml
@@ -299,11 +314,19 @@ defaults:
 
 ## Datapipe: how inputs are constructed and normalized
 
-The datapipe converts reader output into model-ready `SimSample`s. Each sample is one crash run.
+The datapipe converts reader output into model-ready `SimSample`s. Each sample is one crash run (or one timestep of a run, depending on `sample_type`).
 
 Inputs `x` contain `x['coords']` (`[N, 3]` at t0) and `x['features']` (`[N, F]` static plus flattened dynamic features in config order). Targets `y` have shape `[N, T-1, Fo]` where Fo=3 for positions only, or 3+sum(C_k) if `dynamic_targets` is set (e.g. strain, stress).
 
 Config lives under `conf/datapipe/`. Two variants exist: `graph` for MeshGraphNet and `point_cloud` for point cloud-based models (e.g., GeoTransolver and Transolver). Both use `static_features` (e.g. `[thickness]`), `dynamic_features`, `dynamic_targets`, and `global_features`. Use `static_features: []` for no node features. Position and feature stats are computed on the train split, saved to `./stats/` (`node_stats.json`, `feature_stats.json`, `edge_stats.json` for graph), and reused at eval and inference.
+
+### Sample type: all_time_steps vs one_time_step
+
+The datapipe `sample_type` (set in each experiment's `datapipe` block) controls how samples are constructed to match the model's rollout scheme:
+
+- **`all_time_steps`** (one-shot): One sample per run. `x` has `coords` and `features`; `y` is the full trajectory `[N, T-1, Fo]`. Dataset length = `num_samples`.
+
+- **`one_time_step`** (time-conditional): One sample per run per timestep. Each sample corresponds to `(batch_idx, time_idx)`; `x` adds `x['time']` = `time_idx/(T-1)` (normalized); `y` is a single step `[N, Fo]`. Dataset length = `num_samples * (T-1)`. Inference always uses `all_time_steps`, so it receives full trajectories.
 
 Readers return `(srcs, dsts, point_data)`; see the [Reader](#reader-built-in-vtp-and-zarr-readers-and-how-to-add-your-own) section. The graph datapipe builds PyG `Data` with edge features from t0 positions; the point-cloud datapipe ignores connectivity. Models consume `x['coords']` and `x['features']` directly. The `_feature_slices` map associates feature names with column ranges for diagnostics. With `static_features: []`, the features tensor has width zero and the pipeline handles it correctly.
 

@@ -143,6 +143,7 @@ class Trainer:
                 reader=reader,
                 split="validation",
                 logger=logger0,
+                sample_type="all_time_steps",  # always all_time_steps for validation
             )
 
             if self.dist.rank < self.num_validation_replicas:

@@ -150,10 +150,11 @@ The main script is `train.py`.
 
 ```
 conf/
-├── bumper_geotransolver.yaml              # ← self-contained experiment configs
-├── crash_geotransolver.yaml
-├── bumper_geoflare.yaml
-├── crash_geoflare.yaml
+├── bumper_geotransolver_oneshot.yaml       # ← self-contained experiment configs
+├── bumper_geotransolver_time_conditional.yaml
+├── crash_geotransolver_oneshot.yaml
+├── bumper_geoflare_oneshot.yaml
+├── crash_geoflare_oneshot.yaml
 ├── datapipe/                              # dataset configs (generic defaults)
 │   ├── graph.yaml
 │   └── point_cloud.yaml
@@ -180,13 +181,13 @@ Each experiment config is self-contained with its own defaults for reader, datap
 Single GPU:
 
 ```bash
-python train.py --config-name=bumper_geotransolver
+python train.py --config-name=bumper_geotransolver_oneshot
 ```
 
 Multi-GPU (Distributed Data Parallel):
 
 ```bash
-torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=bumper_geotransolver
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=bumper_geotransolver_oneshot
 ```
 
 ## Inference
@@ -198,13 +199,13 @@ Use `inference.py` to evaluate trained models on test crash runs. Outputs are wr
 Single GPU:
 
 ```bash
-python inference.py --config-name=bumper_geotransolver
+python inference.py --config-name=bumper_geotransolver_oneshot
 ```
 
 Multi-GPU (Distributed Data Parallel):
 
 ```bash
-torchrun --nproc_per_node=<NUM_GPUS> inference.py --config-name=bumper_geotransolver
+torchrun --nproc_per_node=<NUM_GPUS> inference.py --config-name=bumper_geotransolver_oneshot
 ```
 
 Runs are sharded across ranks: rank `r` processes `run_items[r::world_size]`.
@@ -271,10 +272,11 @@ datapipe:
 
 | File | Dataset | Model | Launch command |
 |------|---------|-------|----------------|
-| `bumper_geotransolver.yaml` | Bumper beam (VTP) | GeoTransolver one-shot | `python train.py --config-name=bumper_geotransolver` |
-| `crash_geotransolver.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=crash_geotransolver` |
-| `bumper_geoflare.yaml` | Bumper beam (VTP) | GeoFLARE one-shot | `python train.py --config-name=bumper_geoflare` |
-| `crash_geoflare.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=crash_geoflare` |
+| `bumper_geotransolver_oneshot.yaml` | Bumper beam (VTP) | GeoTransolver one-shot | `python train.py --config-name=bumper_geotransolver_oneshot` |
+| `bumper_geotransolver_time_conditional.yaml` | Bumper beam (VTP) | GeoTransolver time-conditional | `python train.py --config-name=bumper_geotransolver_time_conditional` |
+| `crash_geotransolver_oneshot.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=crash_geotransolver_oneshot` |
+| `bumper_geoflare_oneshot.yaml` | Bumper beam (VTP) | GeoFLARE one-shot | `python train.py --config-name=bumper_geoflare_oneshot` |
+| `crash_geoflare_oneshot.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=crash_geoflare_oneshot` |
 
 ### Adding a new experiment
 
@@ -285,8 +287,9 @@ datapipe:
 5. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it in the defaults.
 6. Run: `python train.py --config-name=<my_experiment>`
 
-You can also override the model in the `defaults` section:
+You can also override the model in the `defaults` section. For time-conditional training, use the dedicated experiment config:
 ```yaml
+# Use bumper_geotransolver_time_conditional.yaml, or in your experiment:
 defaults:
   - reader: vtp
   - model: geotransolver_time_conditional  # Override model

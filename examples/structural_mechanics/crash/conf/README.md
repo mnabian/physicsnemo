@@ -6,9 +6,9 @@
 **Each YAML file in `conf/` is a self-contained experiment config.** Run training or inference by selecting one:
 
 ```bash
-python train.py --config-name=bumper_geotransolver
-python train.py --config-name=crash_geotransolver
-python inference.py --config-name=crash_geotransolver
+python train.py --config-name=bumper_geotransolver_oneshot
+python train.py --config-name=crash_geotransolver_oneshot
+python inference.py --config-name=crash_geotransolver_oneshot
 ```
 
 To add a new experiment, copy an existing file in `conf/` and edit data paths, model, and features.

@@ -146,7 +146,7 @@ def test_geotransolver_time_conditional_rollout_eval():
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()
 
-    model = rollout.GeoTransolverTimeConditionalRollout(num_time_steps=T)
+    model = rollout.GeoTransolverTimeConditional(num_time_steps=T)
     model.eval()
 
     out = model.forward(sample=sample, data_stats=stats)

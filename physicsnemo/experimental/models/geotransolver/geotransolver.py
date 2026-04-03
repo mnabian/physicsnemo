@@ -36,6 +36,11 @@ from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.models.transolver.transolver import _TransolverMlp
 
+from .concrete_dropout import (
+    ConcreteDropout,
+    collect_concrete_dropout_losses,
+    get_concrete_dropout_rates,
+)
 from .context_projector import GlobalContextBuilder
 from .gale import GALE_block
 
@@ -315,6 +320,9 @@ class GeoTransolver(Module):
         radii: list[float] | None = None,
         neighbors_in_radius: list[int] | None = None,
         n_hidden_local: int = 32,
+        concrete_dropout: bool = False,
+        dropout_reg: float = 1e-3,
+        weight_reg: float = 1e-6,
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
@@ -357,6 +365,9 @@ class GeoTransolver(Module):
             use_te=use_te,
             plus=plus,
             include_local_features=self.include_local_features,
+            concrete_dropout=concrete_dropout,
+            dropout_reg=dropout_reg,
+            weight_reg=weight_reg,
         )
         context_dim = self.context_builder.get_context_dim()
 
@@ -404,6 +415,9 @@ class GeoTransolver(Module):
                     use_te=use_te,
                     plus=plus,
                     context_dim=context_dim,
+                    concrete_dropout=concrete_dropout,
+                    dropout_reg=dropout_reg,
+                    weight_reg=weight_reg,
                 )
                 for layer_idx in range(n_layers)
             ]
@@ -436,6 +450,38 @@ class GeoTransolver(Module):
                 nn.SiLU(),
                 nn.Linear(n_hidden, n_hidden),
             )
+
+    def concrete_dropout_reg_loss(self) -> torch.Tensor:
+        r"""Collect regularization losses from all ConcreteDropout layers.
+
+        Returns
+        -------
+        torch.Tensor
+            Sum of all ConcreteDropout regularization losses.
+        """
+        return collect_concrete_dropout_losses(self)
+
+    def concrete_dropout_rates(self) -> dict[str, float]:
+        r"""Get learned dropout rates from all ConcreteDropout layers.
+
+        Returns
+        -------
+        dict[str, float]
+            Dictionary mapping module names to learned dropout probabilities.
+        """
+        return get_concrete_dropout_rates(self)
+
+    def enable_mc_dropout(self) -> None:
+        r"""Enable dropout for MC-Dropout inference.
+
+        Sets the model to eval mode but re-enables all ConcreteDropout
+        layers for stochastic forward passes. Use this for uncertainty
+        quantification at inference time.
+        """
+        self.eval()
+        for module in self.modules():
+            if isinstance(module, ConcreteDropout):
+                module.train()
 
     def forward(
         self,

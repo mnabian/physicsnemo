@@ -30,3 +30,5 @@ optimizer:
   betas: [0.9, 0.999]
   eps: 1.0e-8
 
+lambda_reg: 0.0 # multiplier for concrete dropout regularization loss (0 = disabled)
+

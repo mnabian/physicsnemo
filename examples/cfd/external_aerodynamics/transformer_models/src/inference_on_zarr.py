@@ -45,6 +45,11 @@ from physicsnemo.datapipes.cae.transolver_datapipe import (
 from train import forward_pass
 from tabulate import tabulate
 
+from physicsnemo.experimental.models.geotransolver import (
+    ConcreteDropout,
+    get_concrete_dropout_rates,
+)
+
 # import transformer_engine.pytorch as te
 # from transformer_engine.common.recipe import Format, DelayedScaling
 from torch.amp import autocast
@@ -213,6 +218,87 @@ def batched_inference_loop(
     return loss, metrics, (global_predictions, global_targets)
 
 
+def mc_dropout_inference_loop(
+    batch: dict,
+    model: torch.nn.Module,
+    precision: str,
+    data_mode: Literal["surface", "volume"],
+    batch_resolution: int,
+    output_pad_size: int | None,
+    dist_manager: DistributedManager,
+    datapipe: TransolverDataPipe,
+    n_samples: int = 20,
+) -> tuple[torch.Tensor, torch.Tensor, float, dict]:
+    """Run MC-Dropout inference: N stochastic forward passes to estimate uncertainty.
+
+    Parameters
+    ----------
+    batch : dict
+        Input batch dictionary.
+    model : torch.nn.Module
+        Model with ConcreteDropout layers.
+    precision : str
+        Precision setting.
+    data_mode : Literal["surface", "volume"]
+        Data mode.
+    batch_resolution : int
+        Batch resolution for sub-batching.
+    output_pad_size : int | None
+        Output padding for FP8.
+    dist_manager : DistributedManager
+        Distributed manager.
+    datapipe : TransolverDataPipe
+        Data pipeline.
+    n_samples : int
+        Number of stochastic forward passes.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, dict, torch.Tensor]
+        (mean_predictions, std_predictions, all_predictions, mean_loss,
+         mean_metrics, targets) where all_predictions has shape
+         (n_samples, batch, N, C).
+    """
+    all_predictions = []
+    all_losses = []
+    all_metrics_list = []
+
+    for sample_idx in range(n_samples):
+        start = time.time()
+        loss, metrics, (preds, targets) = batched_inference_loop(
+            batch,
+            model,
+            precision,
+            data_mode,
+            batch_resolution,
+            output_pad_size,
+            dist_manager,
+            datapipe,
+        )
+        elapsed = time.time() - start
+        print(f"  MC sample {sample_idx + 1}/{n_samples} in {elapsed:.2f}s")
+
+        all_predictions.append(preds)
+        all_losses.append(loss.item() if hasattr(loss, "item") else float(loss))
+        all_metrics_list.append(metrics)
+
+    # Stack predictions: (n_samples, batch, N, C)
+    stacked = torch.stack(all_predictions, dim=0)
+    mean_predictions = stacked.mean(dim=0)
+    std_predictions = stacked.std(dim=0)
+
+    # Average loss and metrics
+    mean_loss = sum(all_losses) / n_samples
+    mean_metrics = {}
+    for key in all_metrics_list[0]:
+        vals = [m[key] for m in all_metrics_list]
+        mean_metrics[key] = sum(
+            v.item() if hasattr(v, "item") else float(v) for v in vals
+        ) / n_samples
+
+    return mean_predictions, std_predictions, stacked, mean_loss, mean_metrics, targets
+
+
 def inference(cfg: DictConfig) -> None:
     """
     Run inference on a validation Zarr dataset using a trained Transolver model.
@@ -278,7 +364,32 @@ def inference(cfg: DictConfig) -> None:
 
     if cfg.compile:
         model = torch.compile(model, dynamic=True)
-    model.eval()
+
+    # Check if MC-Dropout UQ is enabled
+    mc_dropout_samples = getattr(cfg, "mc_dropout_samples", 0)
+    if mc_dropout_samples > 0:
+        # Enable MC-Dropout: eval mode but with ConcreteDropout layers active
+        model.eval()
+        for m in model.modules():
+            if isinstance(m, ConcreteDropout):
+                m.train()
+        dropout_rates = get_concrete_dropout_rates(model)
+        if dropout_rates:
+            rates = list(dropout_rates.values())
+            logger.info(
+                f"MC-Dropout enabled with {mc_dropout_samples} samples. "
+                f"Learned rates: min={min(rates):.4f} max={max(rates):.4f} "
+                f"mean={sum(rates)/len(rates):.4f}"
+            )
+        else:
+            logger.warning(
+                "mc_dropout_samples > 0 but no ConcreteDropout layers found. "
+                "Was the model trained with concrete_dropout=true?"
+            )
+            mc_dropout_samples = 0
+            model.eval()
+    else:
+        model.eval()
 
     # For INFERENCE, we deliberately set the resolution in the data pipe to NONE
     # so there is not downsampling.  We still batch it in the inference script
@@ -305,9 +416,18 @@ def inference(cfg: DictConfig) -> None:
     results = []
     start = time.time()
     for batch_idx, batch in enumerate(val_dataset):
-        with torch.no_grad():
-            loss, metrics, (global_predictions, global_targets) = (
-                batched_inference_loop(
+        if mc_dropout_samples > 0:
+            # MC-Dropout: run N stochastic forward passes (no torch.no_grad
+            # since dropout needs to be active, but we don't need gradients)
+            with torch.no_grad():
+                (
+                    global_predictions,
+                    global_std,
+                    all_mc_predictions,
+                    loss,
+                    metrics,
+                    global_targets,
+                ) = mc_dropout_inference_loop(
                     batch,
                     model,
                     cfg.precision,
@@ -316,8 +436,27 @@ def inference(cfg: DictConfig) -> None:
                     output_pad_size,
                     dist_manager,
                     val_dataset,
+                    n_samples=mc_dropout_samples,
                 )
+            # Log mean uncertainty for this sample
+            mean_std = global_std.mean().item()
+            logger.info(
+                f"Batch {batch_idx} mean uncertainty (std): {mean_std:.6f}"
             )
+        else:
+            with torch.no_grad():
+                loss, metrics, (global_predictions, global_targets) = (
+                    batched_inference_loop(
+                        batch,
+                        model,
+                        cfg.precision,
+                        cfg.data.mode,
+                        batch_resolution,
+                        output_pad_size,
+                        dist_manager,
+                        val_dataset,
+                    )
+                )
         end = time.time()
         elapsed = end - start
         logger.info(f"Finished batch {batch_idx} in {elapsed:.4f} seconds")

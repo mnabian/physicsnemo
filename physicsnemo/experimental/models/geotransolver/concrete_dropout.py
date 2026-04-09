@@ -18,8 +18,8 @@ r"""Concrete Dropout for learned per-layer dropout rates.
 
 Implements the concrete relaxation of dropout (Gal, Hron & Kendall, 2017) which
 learns the optimal dropout probability for each layer during training. This enables
-well-calibrated Monte Carlo dropout uncertainty quantification without manual
-hyperparameter tuning of per-layer dropout rates.
+Monte Carlo dropout uncertainty quantification without manual tuning of
+per-layer dropout rates.
 
 References
 ----------
@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class ConcreteDropout(nn.Module):
@@ -45,12 +44,7 @@ class ConcreteDropout(nn.Module):
     Parameters
     ----------
     in_features : int
-        Number of input features (used to scale the weight regularization).
-    weight_reg : float, optional
-        Weight regularization coefficient. Scales the L2 penalty on the
-        wrapped layer's weights. Should be proportional to
-        ``l^2 / (2 * N)`` where ``l`` is a prior lengthscale and ``N``
-        is the number of training samples. Default is ``1e-6``.
+        Number of input features (used for logging in ``extra_repr``).
     dropout_reg : float, optional
         Dropout regularization coefficient. Scales the entropy-based
         penalty on the dropout probability. Should be proportional to
@@ -98,15 +92,13 @@ class ConcreteDropout(nn.Module):
     def __init__(
         self,
         in_features: int,
-        weight_reg: float = 1e-6,
         dropout_reg: float = 1e-3,
         init_p: float = 0.1,
         temperature: float = 0.1,
     ) -> None:
         super().__init__()
 
-        # Store regularization coefficients
-        self.weight_reg = weight_reg
+        # Store regularization coefficient
         self.dropout_reg = dropout_reg
         self.temperature = temperature
 
@@ -160,14 +152,9 @@ class ConcreteDropout(nn.Module):
     def regularization_loss(self) -> torch.Tensor:
         r"""Compute the regularization loss for this layer.
 
-        The loss has two components:
-
-        1. **Dropout entropy**: encourages the learned probability away from
-           trivial solutions (0 or 1). This is the negative entropy of a
-           Bernoulli(p) distribution.
-        2. **Weight regularization**: L2 penalty scaled by ``(1 - p)``, so
-           higher dropout reduces the weight penalty (the model can afford
-           larger weights when more are dropped).
+        The loss is the negative entropy of a Bernoulli(p) distribution,
+        which encourages the learned probability away from trivial solutions
+        (0 or 1).
 
         Returns
         -------
@@ -186,7 +173,6 @@ class ConcreteDropout(nn.Module):
         return (
             f"in_features={self._in_features}, "
             f"p={self.p.item():.4f}, "
-            f"weight_reg={self.weight_reg}, "
             f"dropout_reg={self.dropout_reg}"
         )
 

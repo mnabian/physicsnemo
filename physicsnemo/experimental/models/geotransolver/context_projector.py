@@ -120,7 +120,6 @@ class ContextProjector(nn.Module):
         plus: bool = False,
         concrete_dropout: bool = False,
         dropout_reg: float = 1e-3,
-        weight_reg: float = 1e-6,
     ) -> None:
         super().__init__()
         inner_dim = dim_head * heads
@@ -158,7 +157,6 @@ class ContextProjector(nn.Module):
         if concrete_dropout:
             self.output_dropout = ConcreteDropout(
                 in_features=dim_head,
-                weight_reg=weight_reg,
                 dropout_reg=dropout_reg,
                 init_p=max(dropout, 0.05),
             )
@@ -525,7 +523,6 @@ class MultiScaleFeatureExtractor(nn.Module):
         plus: bool = False,
         concrete_dropout: bool = False,
         dropout_reg: float = 1e-3,
-        weight_reg: float = 1e-6,
     ) -> None:
         super().__init__()
         self.num_scales = len(radii)
@@ -553,7 +550,6 @@ class MultiScaleFeatureExtractor(nn.Module):
                     plus,
                     concrete_dropout=concrete_dropout,
                     dropout_reg=dropout_reg,
-                    weight_reg=weight_reg,
                 )
                 for _ in range(self.num_scales)
             ]
@@ -696,7 +692,6 @@ class GlobalContextBuilder(nn.Module):
         include_local_features: bool = False,
         concrete_dropout: bool = False,
         dropout_reg: float = 1e-3,
-        weight_reg: float = 1e-6,
     ) -> None:
         super().__init__()
 
@@ -726,7 +721,6 @@ class GlobalContextBuilder(nn.Module):
                         plus,
                         concrete_dropout=concrete_dropout,
                         dropout_reg=dropout_reg,
-                        weight_reg=weight_reg,
                     )
                     for _ in functional_dims
                 ]
@@ -747,7 +741,6 @@ class GlobalContextBuilder(nn.Module):
                 plus,
                 concrete_dropout=concrete_dropout,
                 dropout_reg=dropout_reg,
-                weight_reg=weight_reg,
             )
             context_dim += dim_head
         else:
@@ -765,7 +758,6 @@ class GlobalContextBuilder(nn.Module):
                 plus,
                 concrete_dropout=concrete_dropout,
                 dropout_reg=dropout_reg,
-                weight_reg=weight_reg,
             )
             context_dim += dim_head
         else:

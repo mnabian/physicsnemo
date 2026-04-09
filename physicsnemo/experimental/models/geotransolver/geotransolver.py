@@ -322,7 +322,6 @@ class GeoTransolver(Module):
         n_hidden_local: int = 32,
         concrete_dropout: bool = False,
         dropout_reg: float = 1e-3,
-        weight_reg: float = 1e-6,
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
@@ -367,7 +366,6 @@ class GeoTransolver(Module):
             include_local_features=self.include_local_features,
             concrete_dropout=concrete_dropout,
             dropout_reg=dropout_reg,
-            weight_reg=weight_reg,
         )
         context_dim = self.context_builder.get_context_dim()
 
@@ -417,7 +415,6 @@ class GeoTransolver(Module):
                     context_dim=context_dim,
                     concrete_dropout=concrete_dropout,
                     dropout_reg=dropout_reg,
-                    weight_reg=weight_reg,
                 )
                 for layer_idx in range(n_layers)
             ]

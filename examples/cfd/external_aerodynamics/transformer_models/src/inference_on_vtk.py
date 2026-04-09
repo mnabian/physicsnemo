@@ -699,37 +699,11 @@ def inference_on_vtk(cfg: DictConfig) -> None:
             # Process through datapipe (adds batch dimension)
             batch = datapipe(data_dict)
 
-            # Run deterministic inference first
-            # Temporarily disable ConcreteDropout for deterministic pass
-            if mc_dropout_samples > 0:
-                for m in model.modules():
-                    if isinstance(m, ConcreteDropout):
-                        m.eval()
-
-            with torch.no_grad():
-                _, _, (det_predictions, _) = batched_inference_loop(
-                    batch=batch,
-                    model=model,
-                    precision=cfg.precision,
-                    data_mode=data_mode,
-                    batch_resolution=batch_resolution,
-                    output_pad_size=output_pad_size,
-                    dist_manager=dist_manager,
-                    datapipe=datapipe,
-                )
-
-            # Remove batch dimension
-            predictions = det_predictions.squeeze(0)
-
-            # Run MC-Dropout inference if enabled
+            # Run inference
             mean_preds = None
             std_preds = None
             if mc_dropout_samples > 0:
-                # Re-enable ConcreteDropout for stochastic passes
-                for m in model.modules():
-                    if isinstance(m, ConcreteDropout):
-                        m.train()
-
+                # MC-Dropout: N stochastic passes, use mean as prediction
                 with torch.no_grad():
                     mc_mean, mc_std, _, _, _, _ = mc_dropout_inference_loop(
                         batch=batch,
@@ -743,8 +717,24 @@ def inference_on_vtk(cfg: DictConfig) -> None:
                         n_samples=mc_dropout_samples,
                     )
 
-                mean_preds = mc_mean.squeeze(0)
+                predictions = mc_mean.squeeze(0)
+                mean_preds = predictions
                 std_preds = mc_std.squeeze(0)
+            else:
+                # Deterministic: single eval-mode forward pass
+                with torch.no_grad():
+                    _, _, (det_predictions, _) = batched_inference_loop(
+                        batch=batch,
+                        model=model,
+                        precision=cfg.precision,
+                        data_mode=data_mode,
+                        batch_resolution=batch_resolution,
+                        output_pad_size=output_pad_size,
+                        dist_manager=dist_manager,
+                        datapipe=datapipe,
+                    )
+
+                predictions = det_predictions.squeeze(0)
 
             # Write predictions to output files
             run_output_dir = output_dir / run_dir.name

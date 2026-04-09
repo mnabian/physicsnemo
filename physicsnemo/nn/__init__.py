@@ -49,6 +49,11 @@ from .module.conditioning_embedders import (
     ZeroConditioningEmbedder,
     get_conditioning_embedder,
 )
+from .module.concrete_dropout import (
+    ConcreteDropout,
+    collect_concrete_dropout_losses,
+    get_concrete_dropout_rates,
+)
 from .module.conv_layers import (
     Conv2d,
     ConvBlock,

@@ -34,6 +34,11 @@ from .conditioning_embedders import (
     ZeroConditioningEmbedder,
     get_conditioning_embedder,
 )
+from .concrete_dropout import (
+    ConcreteDropout,
+    collect_concrete_dropout_losses,
+    get_concrete_dropout_rates,
+)
 from .conv_layers import ConvBlock, CubeEmbedding
 from .dgm_layers import DGMLayer
 from .dit_layers import (

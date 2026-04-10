@@ -43,7 +43,7 @@ from physicsnemo.nn import gumbel_softmax
 from physicsnemo.nn import BQWarp
 from physicsnemo.nn import Mlp
 
-from .concrete_dropout import ConcreteDropout
+from physicsnemo.nn import ConcreteDropout
 
 # Check optional dependency availability
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)

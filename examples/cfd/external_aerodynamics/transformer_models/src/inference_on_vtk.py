@@ -77,11 +77,10 @@ from physicsnemo.datapipes.cae.transolver_datapipe import TransolverDataPipe
 
 from train import update_model_params_for_fp8
 
-from inference_on_zarr import batched_inference_loop, mc_dropout_inference_loop
-
-from physicsnemo.experimental.models.geotransolver import (
-    ConcreteDropout,
-    get_concrete_dropout_rates,
+from inference_utils import (
+    batched_inference_loop,
+    mc_dropout_inference_loop,
+    setup_mc_dropout,
 )
 
 
@@ -598,31 +597,7 @@ def inference_on_vtk(cfg: DictConfig) -> None:
 
     model.to(dist_manager.device)
 
-    # Check if MC-Dropout UQ is enabled
-    mc_dropout_samples = getattr(cfg, "mc_dropout_samples", 0)
-    if mc_dropout_samples > 0:
-        # Enable MC-Dropout: eval mode but with ConcreteDropout layers active
-        model.eval()
-        for m in model.modules():
-            if isinstance(m, ConcreteDropout):
-                m.train()
-        dropout_rates = get_concrete_dropout_rates(model)
-        if dropout_rates:
-            rates = list(dropout_rates.values())
-            logger.info(
-                f"MC-Dropout enabled with {mc_dropout_samples} samples. "
-                f"Learned rates: min={min(rates):.4f} max={max(rates):.4f} "
-                f"mean={sum(rates) / len(rates):.4f}"
-            )
-        else:
-            logger.warning(
-                "mc_dropout_samples > 0 but no ConcreteDropout layers found. "
-                "Was the model trained with concrete_dropout=true?"
-            )
-            mc_dropout_samples = 0
-            model.eval()
-    else:
-        model.eval()
+    mc_dropout_samples = setup_mc_dropout(model, cfg, logger)
 
     if cfg.compile:
         model = torch.compile(model, dynamic=True)

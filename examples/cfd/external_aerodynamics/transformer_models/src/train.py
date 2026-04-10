@@ -57,10 +57,7 @@ from physicsnemo.datapipes.cae.transolver_datapipe import (
 # Local folder imports for this example
 from metrics import metrics_fn
 
-from physicsnemo.experimental.models.geotransolver import (
-    collect_concrete_dropout_losses,
-    get_concrete_dropout_rates,
-)
+from physicsnemo.nn import collect_concrete_dropout_losses, get_concrete_dropout_rates
 
 # tensorwise is to handle single-point-cloud or multi-point-cloud running.
 # it's a decorator that will automatically unzip one or more of a list of tensors,

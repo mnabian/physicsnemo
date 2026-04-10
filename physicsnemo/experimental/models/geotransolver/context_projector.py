@@ -597,7 +597,7 @@ class MultiScaleFeatureExtractor(nn.Module):
             :math:`D_{total}` is ``hidden_dim * num_scales``.
         """
         return torch.cat(
-            [processor(geometry, spatial_coords) for processor in self.processors],
+            [processor(spatial_coords, geometry) for processor in self.processors],
             dim=-1,
         )
 

@@ -21,7 +21,6 @@ import torch
 import torchinfo
 import typing, csv
 import collections
-from typing import Literal
 from datetime import datetime
 
 import hydra
@@ -42,12 +41,12 @@ from physicsnemo.datapipes.cae.transolver_datapipe import (
     create_transolver_dataset,
     TransolverDataPipe,
 )
-from train import forward_pass
 from tabulate import tabulate
 
-from physicsnemo.experimental.models.geotransolver import (
-    ConcreteDropout,
-    get_concrete_dropout_rates,
+from inference_utils import (
+    batched_inference_loop,
+    mc_dropout_inference_loop,
+    setup_mc_dropout,
 )
 
 # import transformer_engine.pytorch as te
@@ -125,181 +124,6 @@ def compute_force_coefficients(
     return c_total, c_p, c_f
 
 
-def batched_inference_loop(
-    batch: dict,
-    model: torch.nn.Module,
-    precision: str,
-    data_mode: Literal["surface", "volume"],
-    batch_resolution: int,
-    output_pad_size: int | None,
-    dist_manager: DistributedManager,
-    datapipe: TransolverDataPipe,
-) -> tuple[float, dict, tuple[torch.Tensor, torch.Tensor]]:
-    N = batch["embeddings"].shape[1]
-    # This generates a random ordering of the input points,
-    # Which we'll then slice up into inputs to the model.
-    indices = torch.randperm(N, device=batch["fx"].device)
-
-    index_blocks = torch.split(indices, batch_resolution)
-
-    global_preds_targets = []
-    global_weight = 0.0
-    start = time.time()
-    for i, index_block in enumerate(index_blocks):
-        # We compute the local_batch by slicing from embeddings and fields:
-        local_embeddings = batch["embeddings"][:, index_block]
-        local_fields = batch["fields"][:, index_block]
-
-        # fx does not need to be sliced for TransolverX:
-        if "geometry" not in batch.keys():
-            local_fx = batch["fx"][:, index_block]
-        else:
-            local_fx = batch["fx"]
-
-        local_batch = {
-            "fx": local_fx,
-            "embeddings": local_embeddings,
-            "fields": local_fields,
-        }
-
-        if "air_density" in batch.keys() and "stream_velocity" in batch.keys():
-            local_batch["air_density"] = batch["air_density"]
-            local_batch["stream_velocity"] = batch["stream_velocity"]
-
-        if "geometry" in batch.keys():
-            local_batch["geometry"] = batch["geometry"]
-
-        # Run the forward inference pass:
-        local_loss, local_metrics, local_preds_targets = forward_pass(
-            local_batch,
-            model,
-            precision,
-            output_pad_size,
-            dist_manager,
-            data_mode,
-            datapipe,
-        )
-
-        # Accumulate the loss and metrics:
-        # (Still on the GPU)
-        weight = index_block.shape[0] / N
-        global_weight += weight
-        if i == 0:
-            metrics = {k: local_metrics[k] * weight for k in local_metrics.keys()}
-            loss = local_loss * weight
-        else:
-            metrics = {
-                k: metrics[k] + local_metrics[k] * weight for k in metrics.keys()
-            }
-            loss += local_loss * weight
-
-        global_preds_targets.append(local_preds_targets)
-
-        end = time.time()
-        elapsed = end - start
-        print(
-            f"Completed sub-batch {i} of {len(index_blocks)} in {elapsed:.4f} seconds"
-        )
-        start = end
-
-    # Now, compute the overall loss, metrics, and coefficients:
-    metrics = {k: v / global_weight for k, v in metrics.items()}
-    loss = loss / global_weight
-
-    global_predictions = torch.cat([l[0][0] for l in global_preds_targets], dim=1)
-    global_targets = torch.cat([l[1][0] for l in global_preds_targets], dim=1)
-
-    # Now, we have to *unshuffle* the prediction to the original index
-    inverse_indices = torch.empty_like(indices)
-    inverse_indices[indices] = torch.arange(indices.size(0), device=indices.device)
-    # Suppose prediction is of shape [batch, N, ...]
-    global_predictions = global_predictions[:, inverse_indices]
-    global_targets = global_targets[:, inverse_indices]
-    return loss, metrics, (global_predictions, global_targets)
-
-
-def mc_dropout_inference_loop(
-    batch: dict,
-    model: torch.nn.Module,
-    precision: str,
-    data_mode: Literal["surface", "volume"],
-    batch_resolution: int,
-    output_pad_size: int | None,
-    dist_manager: DistributedManager,
-    datapipe: TransolverDataPipe,
-    n_samples: int = 20,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, dict, torch.Tensor]:
-    """Run MC-Dropout inference: N stochastic forward passes to estimate uncertainty.
-
-    Parameters
-    ----------
-    batch : dict
-        Input batch dictionary.
-    model : torch.nn.Module
-        Model with ConcreteDropout layers.
-    precision : str
-        Precision setting.
-    data_mode : Literal["surface", "volume"]
-        Data mode.
-    batch_resolution : int
-        Batch resolution for sub-batching.
-    output_pad_size : int | None
-        Output padding for FP8.
-    dist_manager : DistributedManager
-        Distributed manager.
-    datapipe : TransolverDataPipe
-        Data pipeline.
-    n_samples : int
-        Number of stochastic forward passes.
-
-    Returns
-    -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, dict, torch.Tensor]
-        (mean_predictions, std_predictions, all_predictions, mean_loss,
-         mean_metrics, targets) where all_predictions has shape
-         (n_samples, batch, N, C).
-    """
-    all_predictions = []
-    all_losses = []
-    all_metrics_list = []
-    targets = None
-
-    for sample_idx in range(n_samples):
-        start = time.time()
-        loss, metrics, (preds, targets) = batched_inference_loop(
-            batch,
-            model,
-            precision,
-            data_mode,
-            batch_resolution,
-            output_pad_size,
-            dist_manager,
-            datapipe,
-        )
-        elapsed = time.time() - start
-        print(f"  MC sample {sample_idx + 1}/{n_samples} in {elapsed:.2f}s")
-
-        all_predictions.append(preds)
-        all_losses.append(loss.item() if hasattr(loss, "item") else float(loss))
-        all_metrics_list.append(metrics)
-
-    # Stack predictions: (n_samples, batch, N, C)
-    stacked = torch.stack(all_predictions, dim=0)
-    mean_predictions = stacked.mean(dim=0)
-    std_predictions = stacked.std(dim=0)
-
-    # Average loss and metrics
-    mean_loss = sum(all_losses) / n_samples
-    mean_metrics = {}
-    for key in all_metrics_list[0]:
-        vals = [m[key] for m in all_metrics_list]
-        mean_metrics[key] = (
-            sum(v.item() if hasattr(v, "item") else float(v) for v in vals) / n_samples
-        )
-
-    return mean_predictions, std_predictions, stacked, mean_loss, mean_metrics, targets
-
-
 def inference(cfg: DictConfig) -> None:
     """
     Run inference on a validation Zarr dataset using a trained Transolver model.
@@ -366,31 +190,7 @@ def inference(cfg: DictConfig) -> None:
     if cfg.compile:
         model = torch.compile(model, dynamic=True)
 
-    # Check if MC-Dropout UQ is enabled
-    mc_dropout_samples = getattr(cfg, "mc_dropout_samples", 0)
-    if mc_dropout_samples > 0:
-        # Enable MC-Dropout: eval mode but with ConcreteDropout layers active
-        model.eval()
-        for m in model.modules():
-            if isinstance(m, ConcreteDropout):
-                m.train()
-        dropout_rates = get_concrete_dropout_rates(model)
-        if dropout_rates:
-            rates = list(dropout_rates.values())
-            logger.info(
-                f"MC-Dropout enabled with {mc_dropout_samples} samples. "
-                f"Learned rates: min={min(rates):.4f} max={max(rates):.4f} "
-                f"mean={sum(rates) / len(rates):.4f}"
-            )
-        else:
-            logger.warning(
-                "mc_dropout_samples > 0 but no ConcreteDropout layers found. "
-                "Was the model trained with concrete_dropout=true?"
-            )
-            mc_dropout_samples = 0
-            model.eval()
-    else:
-        model.eval()
+    mc_dropout_samples = setup_mc_dropout(model, cfg, logger)
 
     # For INFERENCE, we deliberately set the resolution in the data pipe to NONE
     # so there is not downsampling.  We still batch it in the inference script

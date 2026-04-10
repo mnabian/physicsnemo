@@ -16,6 +16,7 @@
 
 import math
 import types
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
 import torch
@@ -83,6 +84,25 @@ class Mesh:
     - Codimension 1 (triangles in 3D, edges in 2D): unique unit normal (up to sign)
     - Codimension 0 (triangles in 2D, tets in 3D): no normal direction exists
     - Codimension > 1 (edges in 3D): infinitely many normal directions
+
+    **Dimension-Parametrized Types**
+
+    ``Mesh`` supports subscript notation ``Mesh[manifold_dims, spatial_dims]``
+    for type annotations and runtime ``isinstance`` checks::
+
+        def compute_normals(mesh: Mesh[2, 3]) -> torch.Tensor:
+            ...  # accepts only triangle meshes in 3D
+
+        isinstance(mesh, Mesh[2, 3])   # True for triangles in 3D
+        isinstance(mesh, Mesh[1, ...]) # True for any edge mesh
+
+    Use ``...`` (Ellipsis) to leave a dimension unconstrained. The notation
+    also supports ``.boundary`` to derive the boundary type::
+
+        Mesh[2, 3].boundary  # -> Mesh[1, 3]
+
+    See :meth:`__class_getitem__` for the full specification, including
+    symbolic dimension expressions like ``Mesh["n-1", "n"]``.
 
     **Core Data Structure**
 
@@ -196,18 +216,54 @@ class Mesh:
     - **Hexahedra** → split into 5 or 6 tetrahedra each
     - **Polygons/polyhedra** → triangulate/tetrahedralize
 
+    **Immutability**
+
+    ``Mesh`` operations return new instances rather than modifying in place.
+    For example, ``mesh.translate(offset)`` returns a new ``Mesh`` with
+    translated points -- the original ``mesh`` is unchanged. This design
+    enables safe caching of derived geometry (centroids, normals, curvature):
+    cached values remain valid because the underlying ``points`` and ``cells``
+    never change after construction.
+
+    .. important::
+
+       In-place modification of ``points`` or ``cells`` (e.g.,
+       ``mesh.points[0] = ...``) is unsupported and will **silently
+       invalidate** all cached properties. Always construct a new ``Mesh``
+       instead.
+
     **Caching**
 
-    Expensive geometric computations (centroids, areas, normals, etc.) are
-    cached in the ``_cache`` field - a nested TensorDict with ``"cell"`` and
-    ``"point"`` sub-TensorDicts. Access cached values via nested keys::
+    Expensive geometric computations (centroids, areas, normals, curvature,
+    adjacency) are cached in the ``_cache`` field -- a nested ``TensorDict``
+    with ``"cell"``, ``"point"``, and ``"topology"`` sub-dicts. The cache is
+    separate from ``point_data`` / ``cell_data``, so user data is never mixed
+    with internal cached geometry.
+
+    Caches are populated lazily on first access (e.g., the first call to
+    ``mesh.cell_normals`` computes and caches the result; subsequent calls
+    return the cached value). Because ``Mesh`` is effectively immutable (see
+    above), cached values never go stale -- they remain valid for the
+    lifetime of the ``Mesh`` instance.
+
+    Geometric transforms (``translate``, ``rotate``, ``scale``, ``transform``)
+    carry forward applicable cache entries to the new ``Mesh`` rather than
+    discarding them. Topology caches are always preserved (transforms do not
+    change connectivity). Geometric caches (areas, normals, centroids) are
+    re-derived from the transform matrix where possible, avoiding
+    recomputation from raw vertex data.
+
+    Slicing operations (``slice_cells``, ``slice_points``) produce new
+    ``Mesh`` instances with topology caches cleared (since connectivity has
+    changed) but cell-level geometric caches sliced in lockstep.
+
+    Access cached values directly via nested keys::
 
         mesh._cache["cell", "centroids"]   # shape (n_cells, n_dims)
         mesh._cache["point", "normals"]    # shape (n_points, n_dims)
 
-    The cache is separate from ``cell_data`` / ``point_data``, so user data
-    is never mixed with internal cached geometry. To clear all caches,
-    construct a new Mesh without passing ``_cache`` (it defaults to empty).
+    Prefer using properties (``mesh.cell_centroids``, ``mesh.point_normals``)
+    over direct ``_cache`` access.
     """
 
     points: torch.Tensor  # shape: (n_points, n_spatial_dimensions)
@@ -431,10 +487,95 @@ class Mesh:
             ...
 
         def clone(self) -> Self:
-            """Return a shallow clone of this Mesh.
+            """Return a deep clone of this Mesh.
 
-            All tensor storage is shared with the original; metadata and
-            TensorDict structure are independent copies.
+            All tensors are copied (independent storage); the clone can
+            be modified without affecting the original.
+            """
+            ...
+
+        def save(
+            self,
+            prefix: str | Path | None = None,
+            copy_existing: bool = False,
+            *,
+            num_threads: int = 0,
+            return_early: bool = False,
+            share_non_tensor: bool = False,
+        ) -> Self:
+            """Save the mesh to disk as memory-mapped tensors.
+
+            Writes ``points``, ``cells``, ``point_data``, ``cell_data``,
+            ``global_data``, and ``_cache`` to a directory tree of
+            ``.memmap`` files.  Proxy for the tensorclass ``memmap()``
+            method.
+
+            This is the recommended serialization method. Compared to
+            ``torch.save`` (pickle-based), memmap serialization is
+            faster (parallel I/O across files), safer (no arbitrary code
+            execution on load), and supports partial loading.
+
+            Parameters
+            ----------
+            prefix : str, Path, or None
+                Directory path where the memory-mapped files will be
+                written.  If ``None``, a temporary directory is used.
+            copy_existing : bool
+                If ``True``, copy tensors that are already memory-mapped
+                to the new location.
+            num_threads : int
+                Number of threads for parallel I/O (0 = sequential).
+            return_early : bool
+                If ``True``, return before all data is flushed to disk.
+            share_non_tensor : bool
+                If ``True``, share non-tensor data across processes.
+
+            Returns
+            -------
+            Mesh
+                A new Mesh backed by the on-disk memory-mapped storage.
+
+            Examples
+            --------
+            >>> mesh.save("/path/to/mesh")  # doctest: +SKIP
+            >>> reloaded = Mesh.load("/path/to/mesh")  # doctest: +SKIP
+            """
+            ...
+
+        @classmethod
+        def load(
+            cls,
+            prefix: str | Path,
+            device: torch.device | None = None,
+            non_blocking: bool = False,
+        ) -> Self:
+            """Load a previously saved mesh from disk.
+
+            Reads a directory tree of memory-mapped tensors written by
+            :meth:`save` and reconstructs the ``Mesh`` instance,
+            including all attached ``point_data``, ``cell_data``, and
+            ``global_data``.  Proxy for the tensorclass
+            ``load_memmap()`` class method.
+
+            Parameters
+            ----------
+            prefix : str or Path
+                Path to the directory created by :meth:`save`.
+            device : torch.device or None
+                If provided, move all tensors to this device after
+                loading.
+            non_blocking : bool
+                Whether device transfers should be non-blocking.
+
+            Returns
+            -------
+            Mesh
+                The reconstructed Mesh instance.
+
+            Examples
+            --------
+            >>> mesh = Mesh.load("/path/to/mesh")  # doctest: +SKIP
+            >>> mesh_gpu = Mesh.load("/path/to/mesh", device="cuda")  # doctest: +SKIP
             """
             ...
 

@@ -36,11 +36,6 @@ from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.models.transolver.transolver import _TransolverMlp
 
-from .concrete_dropout import (
-    ConcreteDropout,
-    collect_concrete_dropout_losses,
-    get_concrete_dropout_rates,
-)
 from .context_projector import GlobalContextBuilder
 from .gale import GALE_block
 
@@ -444,38 +439,6 @@ class GeoTransolver(Module):
                 nn.SiLU(),
                 nn.Linear(n_hidden, n_hidden),
             )
-
-    def concrete_dropout_reg_loss(self) -> torch.Tensor:
-        r"""Collect regularization losses from all ConcreteDropout layers.
-
-        Returns
-        -------
-        torch.Tensor
-            Sum of all ConcreteDropout regularization losses.
-        """
-        return collect_concrete_dropout_losses(self)
-
-    def concrete_dropout_rates(self) -> dict[str, float]:
-        r"""Get learned dropout rates from all ConcreteDropout layers.
-
-        Returns
-        -------
-        dict[str, float]
-            Dictionary mapping module names to learned dropout probabilities.
-        """
-        return get_concrete_dropout_rates(self)
-
-    def enable_mc_dropout(self) -> None:
-        r"""Enable dropout for MC-Dropout inference.
-
-        Sets the model to eval mode but re-enables all ConcreteDropout
-        layers for stochastic forward passes. Use this for uncertainty
-        quantification at inference time.
-        """
-        self.eval()
-        for module in self.modules():
-            if isinstance(module, ConcreteDropout):
-                module.train()
 
     def forward(
         self,

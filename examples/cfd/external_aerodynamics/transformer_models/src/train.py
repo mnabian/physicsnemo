@@ -18,7 +18,7 @@
 import os
 import time
 from pathlib import Path
-from typing import Literal, Any, Callable, Sequence
+from typing import Literal, Any, Callable
 import collections
 from contextlib import nullcontext
 

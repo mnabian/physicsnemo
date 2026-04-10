@@ -163,10 +163,7 @@ class ConcreteDropout(nn.Module):
         return dropout_entropy
 
     def extra_repr(self) -> str:
-        return (
-            f"in_features={self._in_features}, "
-            f"p={self.p.item():.4f}"
-        )
+        return f"in_features={self._in_features}, p={self.p.item():.4f}"
 
 
 def collect_concrete_dropout_losses(model: nn.Module) -> torch.Tensor:

@@ -293,9 +293,9 @@ def mc_dropout_inference_loop(
     mean_metrics = {}
     for key in all_metrics_list[0]:
         vals = [m[key] for m in all_metrics_list]
-        mean_metrics[key] = sum(
-            v.item() if hasattr(v, "item") else float(v) for v in vals
-        ) / n_samples
+        mean_metrics[key] = (
+            sum(v.item() if hasattr(v, "item") else float(v) for v in vals) / n_samples
+        )
 
     return mean_predictions, std_predictions, stacked, mean_loss, mean_metrics, targets
 
@@ -380,7 +380,7 @@ def inference(cfg: DictConfig) -> None:
             logger.info(
                 f"MC-Dropout enabled with {mc_dropout_samples} samples. "
                 f"Learned rates: min={min(rates):.4f} max={max(rates):.4f} "
-                f"mean={sum(rates)/len(rates):.4f}"
+                f"mean={sum(rates) / len(rates):.4f}"
             )
         else:
             logger.warning(
@@ -441,9 +441,7 @@ def inference(cfg: DictConfig) -> None:
                 )
             # Log mean uncertainty for this sample
             mean_std = global_std.mean().item()
-            logger.info(
-                f"Batch {batch_idx} mean uncertainty (std): {mean_std:.6f}"
-            )
+            logger.info(f"Batch {batch_idx} mean uncertainty (std): {mean_std:.6f}")
         else:
             with torch.no_grad():
                 loss, metrics, (global_predictions, global_targets) = (

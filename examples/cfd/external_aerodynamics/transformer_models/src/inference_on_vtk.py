@@ -612,7 +612,7 @@ def inference_on_vtk(cfg: DictConfig) -> None:
             logger.info(
                 f"MC-Dropout enabled with {mc_dropout_samples} samples. "
                 f"Learned rates: min={min(rates):.4f} max={max(rates):.4f} "
-                f"mean={sum(rates)/len(rates):.4f}"
+                f"mean={sum(rates) / len(rates):.4f}"
             )
         else:
             logger.warning(

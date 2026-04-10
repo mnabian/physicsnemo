@@ -41,6 +41,11 @@ from .module.attention_layers import (
     UNetAttention,
 )
 from .module.ball_query import BQWarp
+from .module.concrete_dropout import (
+    ConcreteDropout,
+    collect_concrete_dropout_losses,
+    get_concrete_dropout_rates,
+)
 from .module.conditioning_embedders import (
     ConditioningEmbedder,
     ConditioningEmbedderType,
@@ -48,11 +53,6 @@ from .module.conditioning_embedders import (
     EDMConditionEmbedder,
     ZeroConditioningEmbedder,
     get_conditioning_embedder,
-)
-from .module.concrete_dropout import (
-    ConcreteDropout,
-    collect_concrete_dropout_losses,
-    get_concrete_dropout_rates,
 )
 from .module.conv_layers import (
     Conv2d,

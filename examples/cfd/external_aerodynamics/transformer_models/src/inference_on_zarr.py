@@ -228,7 +228,7 @@ def mc_dropout_inference_loop(
     dist_manager: DistributedManager,
     datapipe: TransolverDataPipe,
     n_samples: int = 20,
-) -> tuple[torch.Tensor, torch.Tensor, float, dict]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, dict, torch.Tensor]:
     """Run MC-Dropout inference: N stochastic forward passes to estimate uncertainty.
 
     Parameters
@@ -262,6 +262,7 @@ def mc_dropout_inference_loop(
     all_predictions = []
     all_losses = []
     all_metrics_list = []
+    targets = None
 
     for sample_idx in range(n_samples):
         start = time.time()

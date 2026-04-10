@@ -119,7 +119,6 @@ class ContextProjector(nn.Module):
         use_te: bool = True,
         plus: bool = False,
         concrete_dropout: bool = False,
-        dropout_reg: float = 1e-3,
     ) -> None:
         super().__init__()
         inner_dim = dim_head * heads
@@ -157,7 +156,6 @@ class ContextProjector(nn.Module):
         if concrete_dropout:
             self.output_dropout = ConcreteDropout(
                 in_features=dim_head,
-                dropout_reg=dropout_reg,
                 init_p=max(dropout, 0.05),
             )
         else:
@@ -522,7 +520,6 @@ class MultiScaleFeatureExtractor(nn.Module):
         use_te: bool = True,
         plus: bool = False,
         concrete_dropout: bool = False,
-        dropout_reg: float = 1e-3,
     ) -> None:
         super().__init__()
         self.num_scales = len(radii)
@@ -549,7 +546,6 @@ class MultiScaleFeatureExtractor(nn.Module):
                     use_te,
                     plus,
                     concrete_dropout=concrete_dropout,
-                    dropout_reg=dropout_reg,
                 )
                 for _ in range(self.num_scales)
             ]
@@ -691,7 +687,6 @@ class GlobalContextBuilder(nn.Module):
         plus: bool = False,
         include_local_features: bool = False,
         concrete_dropout: bool = False,
-        dropout_reg: float = 1e-3,
     ) -> None:
         super().__init__()
 
@@ -720,7 +715,6 @@ class GlobalContextBuilder(nn.Module):
                         use_te,
                         plus,
                         concrete_dropout=concrete_dropout,
-                        dropout_reg=dropout_reg,
                     )
                     for _ in functional_dims
                 ]
@@ -740,7 +734,6 @@ class GlobalContextBuilder(nn.Module):
                 use_te,
                 plus,
                 concrete_dropout=concrete_dropout,
-                dropout_reg=dropout_reg,
             )
             context_dim += dim_head
         else:
@@ -757,7 +750,6 @@ class GlobalContextBuilder(nn.Module):
                 use_te,
                 plus,
                 concrete_dropout=concrete_dropout,
-                dropout_reg=dropout_reg,
             )
             context_dim += dim_head
         else:

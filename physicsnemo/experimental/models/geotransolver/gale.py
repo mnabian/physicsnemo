@@ -121,7 +121,6 @@ class GALE(PhysicsAttentionIrregularMesh):
         plus: bool = False,
         context_dim: int = 0,
         concrete_dropout: bool = False,
-        dropout_reg: float = 1e-3,
     ) -> None:
         super().__init__(dim, heads, dim_head, dropout, slice_num, use_te, plus)
 
@@ -140,7 +139,6 @@ class GALE(PhysicsAttentionIrregularMesh):
         if concrete_dropout:
             self.out_dropout = ConcreteDropout(
                 in_features=dim,
-                dropout_reg=dropout_reg,
                 init_p=max(dropout, 0.05),
             )
 
@@ -382,7 +380,6 @@ class GALE_block(nn.Module):
         plus: bool = False,
         context_dim: int = 0,
         concrete_dropout: bool = False,
-        dropout_reg: float = 1e-3,
     ) -> None:
         super().__init__()
 
@@ -411,7 +408,6 @@ class GALE_block(nn.Module):
             plus=plus,
             context_dim=context_dim,
             concrete_dropout=concrete_dropout,
-            dropout_reg=dropout_reg,
         )
 
         # Feed-forward network with layer normalization
@@ -436,12 +432,10 @@ class GALE_block(nn.Module):
         if concrete_dropout:
             self.attn_dropout = ConcreteDropout(
                 in_features=hidden_dim,
-                dropout_reg=dropout_reg,
                 init_p=max(dropout, 0.05),
             )
             self.ffn_dropout = ConcreteDropout(
                 in_features=hidden_dim,
-                dropout_reg=dropout_reg,
                 init_p=max(dropout, 0.05),
             )
         else:

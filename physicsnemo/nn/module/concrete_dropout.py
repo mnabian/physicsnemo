@@ -45,10 +45,6 @@ class ConcreteDropout(nn.Module):
     ----------
     in_features : int
         Number of input features (used for logging in ``extra_repr``).
-    dropout_reg : float, optional
-        Dropout regularization coefficient. Scales the entropy-based
-        penalty on the dropout probability. Should be proportional to
-        ``1 / (2 * N)``. Default is ``1e-3``.
     init_p : float, optional
         Initial dropout probability. Default is ``0.1``.
     temperature : float, optional
@@ -92,14 +88,11 @@ class ConcreteDropout(nn.Module):
     def __init__(
         self,
         in_features: int,
-        dropout_reg: float = 1e-3,
         init_p: float = 0.1,
         temperature: float = 0.1,
     ) -> None:
         super().__init__()
 
-        # Store regularization coefficient
-        self.dropout_reg = dropout_reg
         self.temperature = temperature
 
         # Learnable dropout logit, initialized to match init_p
@@ -167,13 +160,12 @@ class ConcreteDropout(nn.Module):
         # Entropy of Bernoulli(p) -- negative because we minimize
         dropout_entropy = p * torch.log(p + eps) + (1.0 - p) * torch.log(1.0 - p + eps)
 
-        return self.dropout_reg * dropout_entropy
+        return dropout_entropy
 
     def extra_repr(self) -> str:
         return (
             f"in_features={self._in_features}, "
-            f"p={self.p.item():.4f}, "
-            f"dropout_reg={self.dropout_reg}"
+            f"p={self.p.item():.4f}"
         )
 
 

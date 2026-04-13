@@ -105,7 +105,7 @@ class ConcreteDropout(nn.Module):
 
     @property
     def p(self) -> torch.Tensor:
-        """Current dropout probability (always in [0, 1])."""
+        """Current dropout probability (always in (0, 1))."""
         return torch.sigmoid(self.p_logit)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -125,6 +125,11 @@ class ConcreteDropout(nn.Module):
         if not self.training:
             return x
 
+        # Clamp logit to prevent sigmoid saturation to exact 0 or 1.
+        # sigmoid(±10) ≈ 4.5e-5 / 0.99995, keeping p strictly in (0, 1)
+        # with non-zero sigmoid gradient so recovery remains possible.
+        self.p_logit.data.clamp_(-10.0, 10.0)
+
         p = self.p
 
         # Concrete relaxation: differentiable approximation to Bernoulli
@@ -133,8 +138,10 @@ class ConcreteDropout(nn.Module):
 
         # Compute concrete (binary concrete) random variable
         # This is the sigmoid of (logit(u) + logit(p)) / temperature
+        # Use p_logit directly instead of log(p) - log(1-p) to avoid
+        # numerical instability when sigmoid saturates near 0 or 1.
         drop_prob = (
-            torch.log(u) - torch.log(1.0 - u) + torch.log(p) - torch.log(1.0 - p)
+            torch.log(u) - torch.log(1.0 - u) + self.p_logit
         ) / self.temperature
         mask = torch.sigmoid(drop_prob)
 

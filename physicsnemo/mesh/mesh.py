@@ -2553,6 +2553,118 @@ class Mesh:
             gradient_type=gradient_type,
         )
 
+    def integrate(
+        self,
+        field: str | tuple[str, ...] | torch.Tensor,
+        data_source: Literal["cells", "points"] = "cells",
+    ) -> torch.Tensor:
+        r"""Integrate a field over the mesh domain.
+
+        Computes :math:`\int_\Omega f\,d\Omega` using the appropriate
+        quadrature rule for the field's discretization.  Cell data is
+        treated as piecewise-constant (P0); point data is treated as
+        piecewise-linear (P1) via the vertex-averaging rule (exact for
+        linear fields, second-order accurate for smooth fields).
+
+        The manifold dimension determines the measure automatically:
+        arc length for ``Mesh[1, ...]``, surface area for ``Mesh[2, ...]``,
+        volume for ``Mesh[3, ...]``, etc.
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], or torch.Tensor
+            Field to integrate:
+
+            - ``str`` or ``tuple``: looked up in ``cell_data`` or
+              ``point_data`` according to *data_source*.
+            - ``torch.Tensor``: used directly.
+        data_source : {"cells", "points"}
+            Whether *field* is cell-centered (P0) or vertex-centered (P1).
+
+        Returns
+        -------
+        torch.Tensor
+            Integral value.  Shape matches ``field.shape[1:]`` (trailing
+            dimensions are preserved: scalar -> 0-d, vector -> 1-d, etc.).
+
+        Raises
+        ------
+        KeyError
+            If *field* is a string key not present in the specified
+            data source.
+        ValueError
+            If the mesh has no cells, or if a raw tensor has the wrong
+            leading dimension for the specified *data_source*.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> pts = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2]])
+        >>> mesh = Mesh(points=pts, cells=cells)
+        >>> mesh.cell_data["p"] = torch.tensor([3.0])
+        >>> mesh.integrate("p")
+        tensor(1.5000)
+        """
+        from physicsnemo.mesh.calculus.integration import integrate
+
+        return integrate(
+            mesh=self,
+            field=field,
+            data_source=data_source,
+        )
+
+    def integrate_flux(
+        self,
+        field: str | tuple[str, ...] | torch.Tensor,
+        data_source: Literal["cells", "points"] = "cells",
+    ) -> torch.Tensor:
+        r"""Compute the surface flux integral for codimension-1 meshes.
+
+        Computes :math:`\int_\Gamma \mathbf{F} \cdot \mathbf{n}\,d\Gamma`,
+        the oriented flux of a vector field through the mesh surface.  Only
+        defined for codimension-1 meshes where unique cell normals exist.
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], or torch.Tensor
+            Vector field with last dimension equal to ``n_spatial_dims``.
+        data_source : {"cells", "points"}
+            Whether *field* is cell-centered or vertex-centered.
+
+        Returns
+        -------
+        torch.Tensor
+            Scalar flux value (0-d tensor).
+
+        Raises
+        ------
+        KeyError
+            If *field* is a string key not present in the specified
+            data source.
+        ValueError
+            If the mesh is not codimension-1, or if the field's last
+            dimension does not match ``n_spatial_dims``.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> sphere = sphere_icosahedral.load(subdivisions=2)
+        >>> # Constant field through a closed surface -> zero flux
+        >>> v = torch.ones(sphere.n_cells, 3)
+        >>> sphere.integrate_flux(v).abs() < 1e-5
+        tensor(True)
+        """
+        from physicsnemo.mesh.calculus.integration import integrate_flux
+
+        return integrate_flux(
+            mesh=self,
+            field=field,
+            data_source=data_source,
+        )
+
     def validate(
         self,
         check_degenerate_cells: bool = True,

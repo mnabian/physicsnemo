@@ -189,11 +189,12 @@ def collect_concrete_dropout_losses(model: nn.Module) -> torch.Tensor:
 
     Examples
     --------
-    >>> model = ...  # model with ConcreteDropout layers
-    >>> data_loss = criterion(model(x), y)
+    >>> import torch
+    >>> import torch.nn as nn
+    >>> model = nn.Sequential(ConcreteDropout(in_features=8), nn.Linear(8, 1))
     >>> reg_loss = collect_concrete_dropout_losses(model)
-    >>> total_loss = data_loss + lambda_reg * reg_loss
-    >>> total_loss.backward()
+    >>> reg_loss.shape
+    torch.Size([])
     """
     reg_loss = torch.tensor(0.0)
     for module in model.modules():
@@ -224,9 +225,11 @@ def get_concrete_dropout_rates(model: nn.Module) -> dict[str, float]:
 
     Examples
     --------
+    >>> import torch.nn as nn
+    >>> model = nn.Sequential(ConcreteDropout(in_features=8), nn.Linear(8, 1))
     >>> rates = get_concrete_dropout_rates(model)
-    >>> for name, rate in rates.items():
-    ...     print(f"{name}: {rate:.4f}")
+    >>> len(rates) == 1
+    True
     """
     rates = {}
     for name, module in model.named_modules():

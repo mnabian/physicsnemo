@@ -19,6 +19,7 @@ import torch
 from .utils import validate_inputs
 
 
+@torch.no_grad()
 def farthest_point_sampling(
     points: torch.Tensor,
     num_samples: int,
@@ -42,6 +43,9 @@ def farthest_point_sampling(
         ``(B, num_samples)`` (batched), dtype ``int64``.
     """
     points, was_unbatched = validate_inputs(points, num_samples)
+    # Compute in float32 to match the Warp backend and to avoid low-precision
+    # distance accumulation for fp16/bf16 inputs.
+    points = points.to(torch.float32)
     batch_size, num_points, _ = points.shape
     device = points.device
 
@@ -52,9 +56,7 @@ def farthest_point_sampling(
     else:
         current = torch.zeros(batch_size, device=device, dtype=torch.long)
 
-    selected = torch.empty(
-        batch_size, num_samples, device=device, dtype=torch.long
-    )
+    selected = torch.empty(batch_size, num_samples, device=device, dtype=torch.long)
     min_dist = torch.full(
         (batch_size, num_points), float("inf"), device=device, dtype=points.dtype
     )
@@ -62,6 +64,8 @@ def farthest_point_sampling(
 
     for i in range(num_samples):
         selected[:, i] = current
+        if i + 1 == num_samples:
+            break  # last index recorded; skip the unused final update
         centroid = points[batch, current].unsqueeze(1)  # (B, 1, D)
         dist = torch.sum((points - centroid) ** 2, dim=-1)  # (B, N)
         min_dist = torch.minimum(min_dist, dist)

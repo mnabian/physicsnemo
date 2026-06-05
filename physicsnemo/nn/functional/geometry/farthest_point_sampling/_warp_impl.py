@@ -34,9 +34,7 @@ wp.init()
 _BLOCK_SIZE = 512
 
 
-@torch.library.custom_op(
-    "physicsnemo::farthest_point_sampling_warp", mutates_args=()
-)
+@torch.library.custom_op("physicsnemo::farthest_point_sampling_warp", mutates_args=())
 def farthest_point_sampling(
     points: torch.Tensor,
     num_samples: int,
@@ -73,9 +71,7 @@ def farthest_point_sampling(
         )
     else:
         start = torch.zeros(batch_size, device=device, dtype=torch.int32)
-    selected = torch.empty(
-        batch_size, num_samples, device=device, dtype=torch.int32
-    )
+    selected = torch.empty(batch_size, num_samples, device=device, dtype=torch.int32)
     min_dist = torch.full(
         (batch_size, num_points), 1.0e30, device=device, dtype=torch.float32
     )
@@ -113,9 +109,7 @@ def _(
     random_start: bool = False,
 ) -> torch.Tensor:
     if points.ndim == 2:
-        return torch.empty(
-            (num_samples,), dtype=torch.int64, device=points.device
-        )
+        return torch.empty((num_samples,), dtype=torch.int64, device=points.device)
     return torch.empty(
         (int(points.shape[0]), num_samples),
         dtype=torch.int64,

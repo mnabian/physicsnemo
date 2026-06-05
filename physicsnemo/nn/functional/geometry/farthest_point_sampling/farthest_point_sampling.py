@@ -53,7 +53,9 @@ class FarthestPointSampling(FunctionSpec):
         points (torch.Tensor): Point cloud of shape ``(N, D)`` or ``(B, N, D)``.
         num_samples (int): Number of points to select; ``1 <= num_samples <= N``.
         random_start (bool, optional): Start from a random point per cloud
-            instead of index 0. Defaults to False.
+            instead of index 0. Defaults to False. Note: this draws randomness
+            internally and is non-deterministic; it is not recommended under
+            ``torch.compile`` (the op is not traced as a random operation).
         implementation (str, optional): Explicit backend name (``"warp"`` or
             ``"torch"``). Defaults to None (auto-select).
 
@@ -125,9 +127,13 @@ class FarthestPointSampling(FunctionSpec):
     def make_inputs_forward(cls, device: torch.device | str = "cpu"):
         """Yield ``(label, args, kwargs)`` tuples for forward-pass benchmarking."""
         device = torch.device(device)
-        for label, batch_size, num_points, point_dim, num_samples in (
-            cls._BENCHMARK_CASES
-        ):
+        for (
+            label,
+            batch_size,
+            num_points,
+            point_dim,
+            num_samples,
+        ) in cls._BENCHMARK_CASES:
             if batch_size == 1:
                 points = torch.rand(num_points, point_dim, device=device)
             else:
@@ -138,15 +144,24 @@ class FarthestPointSampling(FunctionSpec):
     def compare_forward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
         """Order-invariant comparison of two selected-index sets.
 
-        FPS is a deterministic greedy selection, so for tie-free inputs both
-        backends select the same set of points. Traversal order is identical
-        too, but comparing the sorted sets is the robust check.
+        Sorted on purpose: the benchmark harness calls this on *unseeded*
+        random float32 inputs, and the two backends accumulate squared
+        distances in a different order (torch's vectorized reduction vs. the
+        Warp kernel's per-axis loop). On a genuine near-tie that can flip a
+        single ``argmax`` and reorder an otherwise-identical selection, which a
+        direct comparison would report as a spurious mismatch. Comparing sorted
+        sets stays robust to that while still catching a real divergence
+        (different *sets*).
+
+        Trade-off: this would not flag two backends that select the same set in
+        a different order — but for greedy FPS a divergent pick changes the
+        selected set from that step onward, so "same set, different order" does
+        not occur in practice. Exact ordering and values are covered instead by
+        the known-answer and greedy-optimality tests.
         """
         torch.testing.assert_close(
             output.sort(dim=-1).values, reference.sort(dim=-1).values
         )
 
 
-farthest_point_sampling = FarthestPointSampling.make_function(
-    "farthest_point_sampling"
-)
+farthest_point_sampling = FarthestPointSampling.make_function("farthest_point_sampling")

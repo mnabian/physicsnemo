@@ -49,23 +49,32 @@ class FarthestPointSampling(FunctionSpec):
     for many clouds or moderate cloud sizes; a single very large cloud
     (``B = 1``, large ``N``) is occupancy-bound and sees a smaller speedup.
 
-    Args:
-        points (torch.Tensor): Point cloud of shape ``(N, D)`` or ``(B, N, D)``.
-        num_samples (int): Number of points to select; ``1 <= num_samples <= N``.
-        random_start (bool, optional): Start from a random point per cloud
-            instead of index 0. Defaults to False. Note: this draws randomness
-            internally and is non-deterministic; it is not recommended under
-            ``torch.compile`` (the op is not traced as a random operation).
-        implementation (str, optional): Explicit backend name (``"warp"`` or
-            ``"torch"``). Defaults to None (auto-select).
+    Parameters
+    ----------
+    points : torch.Tensor
+        Point cloud of shape ``(N, D)`` or ``(B, N, D)``.
+    num_samples : int
+        Number of points to select; ``1 <= num_samples <= N``.
+    random_start : bool, optional
+        Start from a random point per cloud instead of index 0. Default
+        ``False``. Note: this draws randomness internally and is
+        non-deterministic; it is not recommended under ``torch.compile`` (the
+        op is not traced as a random operation).
+    implementation : str, optional
+        Explicit backend name (``"warp"`` or ``"torch"``). ``None`` auto-selects.
+        Default ``None``.
 
-    Returns:
-        torch.Tensor: Selected indices of shape ``(num_samples,)`` (unbatched)
-        or ``(B, num_samples)`` (batched), dtype ``int64``.
+    Returns
+    -------
+    torch.Tensor
+        Selected indices of shape ``(num_samples,)`` (unbatched) or
+        ``(B, num_samples)`` (batched), dtype ``int64``.
 
-    Raises:
-        ValueError: If ``points`` is not rank 2 or 3, or if ``num_samples`` is
-            outside ``[1, N]``.
+    Raises
+    ------
+    ValueError
+        If ``points`` is not rank 2 or 3, or if ``num_samples`` is outside
+        ``[1, N]``.
     """
 
     _BENCHMARK_CASES = (

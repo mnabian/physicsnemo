@@ -32,13 +32,19 @@ def farthest_point_sampling(
     (no per-iteration host synchronization), and the batch axis is processed
     in parallel.
 
-    Args:
-        points: ``(N, D)`` or ``(B, N, D)`` coordinates.
-        num_samples: Number of points to select (``1 <= num_samples <= N``).
-        random_start: If True, start from a random point per cloud; otherwise
-            start from index 0.
+    Parameters
+    ----------
+    points : torch.Tensor
+        Coordinates of shape ``(N, D)`` or ``(B, N, D)``.
+    num_samples : int
+        Number of points to select (``1 <= num_samples <= N``).
+    random_start : bool, optional
+        If ``True``, start from a random point per cloud; otherwise start from
+        index 0. Default ``False``.
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Selected indices of shape ``(num_samples,)`` (unbatched) or
         ``(B, num_samples)`` (batched), dtype ``int64``.
     """

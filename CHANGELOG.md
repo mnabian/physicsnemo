@@ -11,11 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Adds `farthest_point_sampling` to `physicsnemo.nn.functional`, a greedy
-  farthest-point sampling (FPS) functional for point clouds with a pure-PyTorch
-  baseline and a CUDA-only Warp backend that fuses the entire selection into a
-  single kernel launch (`FunctionSpec`-based; auto-dispatch uses Warp on CUDA
-  and the torch baseline on CPU). Supports unbatched `(N, D)` and batched
-  `(B, N, D)` inputs.
+  farthest-point sampling (FPS) functional for point clouds.
+- Adds `FourierPositionalEmbedding` to `physicsnemo.nn`, a deterministic
+  axis-wise (NeRF-style) Fourier positional embedding for continuous
+  coordinates with no learnable parameters.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
 - Adds xDeepONet to experimental models

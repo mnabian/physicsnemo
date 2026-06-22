@@ -20,7 +20,7 @@
     "question": "I already have a trained PyTorch nn.Module. How do I turn it into a PhysicsNeMo model so it can be saved and loaded with from_checkpoint?",
     "expected_skill": "physicsnemo-model-builder",
     "expected_script": null,
-    "ground_truth": "An external nn.Module is integrated via Module.from_torch(TheirNet, meta=ModelMetaData()), which yields a physicsnemo.Module supporting save/from_checkpoint/registry. The hard requirement is that the wrapped class's __init__ arguments are JSON-serializable; any nested nn.Module arguments must each be converted with Module.from_torch first (a raw nn.Module argument makes save() raise TypeError). The integration must be proven with a save/load round-trip using validate_checkpoint from test.common. The skill explains this serialization contract explicitly because it is the most common external-integration failure.",
+    "ground_truth": "An external nn.Module is integrated via Module.from_torch(TheirNet, meta=ModelMetaData()), which yields a physicsnemo.Module supporting save/from_checkpoint/registry. The hard requirement is that the wrapped class's __init__ arguments are JSON-serializable; any nested nn.Module arguments must each be converted with Module.from_torch first (a raw nn.Module argument makes save() raise TypeError). The integration must be proven with a save/load round-trip using validate_checkpoint from test.common. The skill explains this serialization contract explicitly because it is a common external-integration failure.",
     "expected_behavior": [
       "Loads the physicsnemo-model-builder skill.",
       "Recommends Module.from_torch as the external-integration path.",

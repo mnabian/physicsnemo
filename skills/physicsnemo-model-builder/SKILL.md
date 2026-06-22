@@ -1,6 +1,6 @@
 ---
 name: physicsnemo-model-builder
-description: Official NVIDIA-authored workflow for adding a new model or reusable layer to PhysicsNeMo, or integrating an existing PyTorch model. Scaffolds a standards-compliant physicsnemo.Module (or a Module.from_torch wrapper for an external nn.Module), places it correctly, wires exports, writes tests against the house test helpers, and runs the local CI gates (ruff, interrogate, pytest). Use when a contributor wants to add or port a model or layer into the physicsnemo package. Do NOT use for: datapipes, nn.functional ops/backends (FunctionSpec), losses/metrics, training-recipe or example authoring, environment/installation setup, or merely deciding which existing model fits a task (use physicsnemo-discover for that).
+description: Official NVIDIA-authored workflow for adding a new model or reusable layer to PhysicsNeMo, or integrating an existing PyTorch model. Scaffolds a standards-compliant physicsnemo.Module (or a Module.from_torch wrapper for an external nn.Module), places it correctly, wires exports, writes tests against the house test helpers, and runs the local CI gates (ruff, interrogate, pytest). Use when a contributor wants to add or port a model or layer into the physicsnemo package. Do NOT use for datapipes, nn.functional ops/backends such as FunctionSpec, losses or metrics, training-recipe or example authoring, environment/installation setup, or merely deciding which existing model fits a task (use physicsnemo-discover for that).
 license: Apache-2.0
 metadata:
   author: NVIDIA <agent-skills@nvidia.com>
@@ -133,16 +133,19 @@ runtime contracts — the serialization round-trip test must still pass there.
 
 - Add a one-line `CHANGELOG.md` entry and SPDX Apache-2.0 headers to new files;
   remind the contributor commits need `-s` (sign-off).
-- Run the built-in **`/code-review`** skill on the diff for an independent pass
-  (`/code-review --fix` applies quick cleanups). Then point them at opening the
-  PR (CODEOWNERS review + CI).
+- Do an independent **code-review pass over the diff** before opening the PR —
+  re-check it against the standards (`MOD-***`/`EXT-***`), correctness, and the
+  reuse audit, ideally with fresh eyes (a separate review session/agent). If the
+  host agent offers a built-in code-review command (for example Claude Code's
+  `/code-review`), use it; otherwise review the diff directly. Then open the PR
+  — CODEOWNERS review + CI re-run the gates.
 
-## Hard-won lessons
+## Common gotchas
 
 Surface the relevant traps inline as you scaffold (full catalogue:
 `references/lessons.md`):
 
-- **`Module` serialization** is the #1 external-integration failure: raw
+- **`Module` serialization** is a common external-integration failure: raw
   `nn.Module` submodule args break `from_checkpoint` (`references/serialization.md`).
 - The **TE-aware `LayerNorm`** runs only on CUDA when Transformer Engine is
   present; tests must skip the CPU case under TE.

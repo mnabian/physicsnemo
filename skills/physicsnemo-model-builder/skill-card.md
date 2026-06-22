@@ -16,7 +16,7 @@ Global <br>
 
 ## Known Risks and Mitigations: <br>
 Risk: The skill scaffolds and edits source files; generated code could be incorrect, incomplete, or place files in the wrong location if the live repository structure differs from assumptions. <br>
-Mitigation: The skill verifies paths against the live repo before citing them, runs the CI gates (ruff, interrogate, pytest) and an independent `/code-review` pass before completion, and defers the model's novel architecture to the human. Review the diff and the CI result before merging. <br>
+Mitigation: The skill verifies paths against the live repo before citing them, runs the CI gates (ruff, interrogate, pytest) and an independent code-review pass over the diff before completion, and defers the model's novel architecture to the human. Review the diff and the CI result before merging. <br>
 
 ## Reference(s): <br>
 - [placement.md](references/placement.md) <br>

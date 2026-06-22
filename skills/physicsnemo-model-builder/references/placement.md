@@ -72,9 +72,8 @@ If unsure, start it as a layer local to your model dir; promote it to
 
 ## Don't put these here (redirect)
 
-- A **loss or metric** → `physicsnemo/metrics/<domain>/` (or
-  `physicsnemo/experimental/metrics/`). There is no `losses/` folder
-  convention.
+- A **loss or metric** → `physicsnemo/metrics/` (or
+  `physicsnemo/experimental/metrics/`).
 - A **functional op / custom CUDA-Warp/cuML backend** →
   `physicsnemo/nn/functional/` via a `FunctionSpec`.
 - A **datapipe** → `physicsnemo/datapipes/`.

@@ -35,7 +35,7 @@ ls physicsnemo/nn/functional/ ; grep -rnE "^def |^class " physicsnemo/nn/functio
 
 | Need | Search | Likely already there |
 |---|---|---|
-| Attention (mesh/point/grid) | `ls physicsnemo/nn/module/*attention*.py` ; `grep -rn "class .*Attention" physicsnemo/nn/module/` | physics-attention base + subclasses; Earth/UNet attention; point-transformer vector attention |
+| Attention (mesh/point/grid) | `ls physicsnemo/nn/module/*attention*.py` ; `grep -rn "class .*Attention" physicsnemo/nn/module/` | physics-attention base + subclasses; Earth/UNet attention |
 | MLP / fully-connected | `grep -rn "class Mlp\|class .*FCLayer\|FullyConnected" physicsnemo/nn/module/` | `Mlp` (configurable, TE-aware), FC layers |
 | Positional / Fourier embeddings | `grep -rn "class .*Embedding\|fourier" physicsnemo/nn/module/embedding_layers.py physicsnemo/nn/module/fourier_layers.py` | Fourier / sinusoidal / positional embeddings |
 | Normalization | `grep -rn "LayerNorm\|GroupNorm\|RunningNorm" physicsnemo/nn/module/` | **TE-aware `LayerNorm`** (`physicsnemo/nn/module/layer_norm.py`) — use this, not `torch.nn.LayerNorm`, to get Transformer-Engine acceleration |

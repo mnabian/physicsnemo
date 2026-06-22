@@ -1,7 +1,7 @@
-# Serialization — the `physicsnemo.Module` contract (and the #1 trap)
+# Serialization — the `physicsnemo.Module` contract (and a common trap)
 
-This is the single most common thing external contributors get wrong. Read it
-before scaffolding any `__init__`.
+This is a common thing external contributors get wrong. Read it before
+scaffolding any `__init__`.
 
 ## Why `physicsnemo.Module`, not `torch.nn.Module`
 

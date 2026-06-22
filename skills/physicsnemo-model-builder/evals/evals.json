@@ -1,0 +1,56 @@
+[
+  {
+    "id": "add-new-model-from-scratch",
+    "question": "I have a new graph-transformer surrogate architecture for mesh data. How do I add it as a model in PhysicsNeMo so it follows the repository conventions?",
+    "expected_skill": "physicsnemo-model-builder",
+    "expected_script": null,
+    "ground_truth": "A new model is scaffolded under physicsnemo/experimental/models/<name>/ (MOD-002a: new models start in experimental), as a subclass of physicsnemo.Module (not torch.nn.Module; MOD-001) carrying a ModelMetaData. Its constructor takes JSON-serializable config and builds submodules internally (no splatted **kwargs / no string-based class selection; MOD-010/MOD-009), reusing existing physicsnemo.nn primitives where possible rather than reimplementing them. The forward has jaxtyping annotations on tensor args (MOD-006), is_compiling()-guarded shape validation (MOD-005), and NumPy r-docstrings with Parameters/Forward/Outputs and :math: shapes (MOD-003). Tests mirror the source path and use test.common helpers (validate_forward_accuracy, validate_checkpoint; MOD-008). The contributor supplies the novel forward math; the skill scaffolds everything around it and runs the gates.",
+    "expected_behavior": [
+      "Loads the physicsnemo-model-builder skill.",
+      "Recommends placing the new model under physicsnemo/experimental/models/ and explains why (MOD-002a).",
+      "Scaffolds a physicsnemo.Module subclass (not torch.nn.Module) with a ModelMetaData and a JSON-serializable constructor.",
+      "Performs a reuse audit of physicsnemo.nn before reimplementing primitives.",
+      "Proposes tests using test.common (validate_forward_accuracy / validate_checkpoint), not hand-rolled checkpoint comparisons.",
+      "Does not invent the model's architecture; defers the forward math to the contributor.",
+      "Every absolute path cited in the final message exists on disk."
+    ]
+  },
+  {
+    "id": "wrap-external-pytorch-model",
+    "question": "I already have a trained PyTorch nn.Module. How do I turn it into a PhysicsNeMo model so it can be saved and loaded with from_checkpoint?",
+    "expected_skill": "physicsnemo-model-builder",
+    "expected_script": null,
+    "ground_truth": "An external nn.Module is integrated via Module.from_torch(TheirNet, meta=ModelMetaData()), which yields a physicsnemo.Module supporting save/from_checkpoint/registry. The hard requirement is that the wrapped class's __init__ arguments are JSON-serializable; any nested nn.Module arguments must each be converted with Module.from_torch first (a raw nn.Module argument makes save() raise TypeError). The integration must be proven with a save/load round-trip using validate_checkpoint from test.common. The skill explains this serialization contract explicitly because it is the most common external-integration failure.",
+    "expected_behavior": [
+      "Loads the physicsnemo-model-builder skill.",
+      "Recommends Module.from_torch as the external-integration path.",
+      "Explains the serialization contract: __init__ args must be JSON-serializable, and nested nn.Module args must be converted via Module.from_torch.",
+      "Recommends verifying with a validate_checkpoint round-trip.",
+      "Every absolute path cited in the final message exists on disk."
+    ]
+  },
+  {
+    "id": "discovery-defers-to-discover-skill",
+    "question": "Which existing PhysicsNeMo model family should I use for forecasting on a lat-lon grid on the sphere?",
+    "expected_skill": "physicsnemo-discover",
+    "expected_script": null,
+    "ground_truth": "This is a discovery / routing question about which EXISTING model to use, not a request to add or integrate a new model. The physicsnemo-model-builder skill should NOT activate; physicsnemo-discover is the correct skill. The model-builder skill is scoped to authoring/porting new models and layers, not selecting among existing ones.",
+    "expected_behavior": [
+      "Does NOT load the physicsnemo-model-builder skill.",
+      "Treats the request as model selection/discovery (physicsnemo-discover territory), not authoring.",
+      "Does not scaffold a new model or layer."
+    ]
+  },
+  {
+    "id": "out-of-scope-datapipe",
+    "question": "How do I add a new datapipe for my custom HDF5 dataset in PhysicsNeMo?",
+    "expected_skill": null,
+    "expected_script": null,
+    "ground_truth": "Datapipes are out of scope for the physicsnemo-model-builder skill, which covers complete models, reusable layers, and wrapping external PyTorch models. A datapipe belongs under physicsnemo/datapipes/. The skill should not activate and should redirect rather than scaffold a model/layer.",
+    "expected_behavior": [
+      "Does NOT load the physicsnemo-model-builder skill.",
+      "Recognizes datapipes as out of scope and redirects toward physicsnemo/datapipes/.",
+      "Does not scaffold a physicsnemo.Module model or layer."
+    ]
+  }
+]

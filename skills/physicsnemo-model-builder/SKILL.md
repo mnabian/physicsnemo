@@ -58,6 +58,13 @@ losses & metrics (`physicsnemo/metrics/`), training recipes (`examples/`), and
 Run in order. Confirm the consequential choices with the contributor
 (artifact type, placement, external-wrap vs from-scratch); scaffold the rest.
 
+**Default to action.** When the repository is available, *create the actual
+files* — `__init__.py`, `<name>.py`, and the test module — with a placeholder
+`forward` that raises `NotImplementedError` (marked `# TODO: contributor's
+forward math`), rather than only describing them in prose. Ask only the
+questions that genuinely block placement; then produce files and iterate. The
+skill's value is the working scaffold on disk, not a description of one.
+
 ### 1. Intake & classify
 
 Ask only what you can't infer (≤4 questions). Resolve:
@@ -113,8 +120,14 @@ contributor's shapes; explain what each enforced piece is for.
 Generate the test module from `references/scaffolds.md`: class-per-public-class,
 the `device` fixture, parametrized constructor/attribute checks (≥2 configs —
 `MOD-008a`), `validate_forward_accuracy` for non-regression (`MOD-008b`), and
-`validate_checkpoint` for the save/load round-trip (`MOD-008c`) — both from
-`test.common`. Don't hand-roll what `test.common` provides.
+`validate_checkpoint` for the save/load round-trip (`MOD-008c`). These helpers
+are **mandatory and come from `test.common`** — write the import explicitly in
+the generated test and name them in your summary; don't hand-roll what they
+provide:
+
+```python
+from test.common import validate_forward_accuracy, validate_checkpoint
+```
 
 ### 6. Gates
 

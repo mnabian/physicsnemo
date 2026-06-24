@@ -26,6 +26,21 @@ The audience is a researcher fluent in PyTorch but new to PhysicsNeMo, so
 **explain the "why"** at each step (name the rule, give the reason) rather
 than silently emitting files.
 
+## When NOT to use this skill
+
+Stop and **redirect — do not activate** — when the request is to *pick*, *use*,
+or *configure* something that already exists, or targets another surface:
+
+- **"Which existing model should I use / which fits my data?"** — selection and
+  discovery, not authoring → `physicsnemo-discover`.
+- **Datapipes** (`physicsnemo/datapipes/`), **losses or metrics**
+  (`physicsnemo/metrics/`), **functional ops / backends**
+  (`physicsnemo/nn/functional/`, `FunctionSpec`), **training recipes / examples**
+  (`examples/`).
+
+This skill is only for **authoring or porting** a model or reusable layer into
+the `physicsnemo` package.
+
 ## Core principle
 
 1. **The written standards are ground truth — read them, don't paraphrase from
@@ -181,6 +196,25 @@ runtime contracts — the serialization round-trip test must still pass there.
   host agent offers a built-in code-review command (for example Claude Code's
   `/code-review`), use it; otherwise review the diff directly. Then open the PR
   — CODEOWNERS review + CI re-run the gates.
+
+### 8. Definition of done
+
+Confirm each before declaring success; fix any miss before finishing:
+
+- [ ] Repo root resolved; every cited path verified to exist (no memory/guesses).
+- [ ] Placed right: model → `experimental/models/` (`MOD-002a`); layer →
+  `nn/module/` + both `__init__` re-exports (`MOD-000a`).
+- [ ] Subclasses `physicsnemo.Module` with a `ModelMetaData` (`MOD-001`);
+  `__init__` is JSON-serializable — no splatted `**kwargs` (`MOD-010`), no
+  string class selection (`MOD-009`).
+- [ ] `forward` has jaxtyping on every tensor arg (`MOD-006`) +
+  `is_compiling()`-guarded shape validation (`MOD-005`); NumPy `r"""` docstrings
+  with `:math:` shapes (`MOD-003`).
+- [ ] Reuse audit done — nothing reimplemented that `physicsnemo.nn` provides.
+- [ ] Tests use `test.common`: `validate_forward_accuracy` (`MOD-008b`) +
+  `validate_checkpoint` (`MOD-008c`), ≥2 constructor configs (`MOD-008a`).
+- [ ] Gates green (`make lint`, `make interrogate`, `make pytest`);
+  `CHANGELOG.md` entry + SPDX headers added.
 
 ## Common gotchas
 

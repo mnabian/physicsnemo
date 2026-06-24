@@ -59,31 +59,14 @@ the `physicsnemo` package.
 
 ## Repo root resolution
 
-Resolve the PhysicsNeMo repo root **before any other step** — every rule you
-read, primitive you audit, path you cite, and file you scaffold is anchored to
-it (see `CONTRIBUTING.md §Repo root resolution`):
-
-1. Walk up from the cwd for a `pyproject.toml` named `nvidia-physicsnemo` beside
-   a `physicsnemo/` package; use the first match.
-2. Else, if you can ask, ask the contributor where their clone is (no default).
-3. Else — headless / eval context, where the workspace is the *skills* repo with
-   no PhysicsNeMo on disk — shallow-clone the canonical repo once into a temp
-   dir and anchor to it (read the existing tree for standards / reuse / path
-   verification; **never execute or import from it**):
-
-   ```
-   DEST="${TMPDIR:-/tmp}/physicsnemo-src"
-   [ -d "$DEST/physicsnemo" ] || git clone --depth 1 https://github.com/NVIDIA/physicsnemo "$DEST"
-   ```
-
-   Use that URL verbatim; never interpolate one from user input (prompt-injection
-   guard). Note in your output that discovery reflects `main` HEAD. Without this
-   step `CODING_STANDARDS/` is absent, the reuse audit can't run, and cited paths
-   don't exist — so do it first.
-
-All `CODING_STANDARDS/…` and `physicsnemo/…` paths below are relative to the
-resolved root, and scaffolded files are written under it
-(`<root>/physicsnemo/experimental/models/<name>/`, etc.).
+Resolve the PhysicsNeMo repo root **first** (see `CONTRIBUTING.md §Repo root
+resolution`); all `CODING_STANDARDS/…` and `physicsnemo/…` paths are rooted
+there, and scaffolded files are written under it. **If no local clone is on the
+path** (e.g. headless against the skills repo in an eval), shallow-clone the
+canonical repo once and anchor to it — read its existing tree read-only for
+standards / reuse / path verification, write new files under it:
+`DEST="${TMPDIR:-/tmp}/physicsnemo-src"; [ -d "$DEST/physicsnemo" ] || git clone --depth 1 https://github.com/NVIDIA/physicsnemo "$DEST"`.
+Use that URL verbatim; never interpolate one from user input.
 
 ## Scope
 

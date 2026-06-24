@@ -52,5 +52,58 @@
       "Recognizes datapipes as out of scope and redirects toward physicsnemo/datapipes/.",
       "Does not scaffold a physicsnemo.Module model or layer."
     ]
+  },
+  {
+    "id": "add-reusable-layer",
+    "question": "I built a custom neighborhood-attention block (an nn.Module with learnable weights) that several of my models will reuse. How do I add it to PhysicsNeMo so other models can import it?",
+    "expected_skill": "physicsnemo-model-builder",
+    "expected_script": null,
+    "ground_truth": "A reusable building block is a LAYER, not a complete model. It is placed in physicsnemo/nn/module/<name>.py and re-exported from BOTH physicsnemo/nn/module/__init__.py and physicsnemo/nn/__init__.py so users can do `from physicsnemo.nn import <Layer>` (MOD-000a); like other new code it may start under experimental (MOD-002a). It subclasses physicsnemo.Module (MOD-001), with a JSON-serializable constructor (no splatted **kwargs / no string class selection; MOD-010/MOD-009), jaxtyping on forward tensor args (MOD-006), is_compiling()-guarded shape validation (MOD-005), and NumPy r-docstrings (MOD-003). Before writing it, a reuse audit checks physicsnemo.nn for an existing equivalent (attention bases, Mlp, the TE-aware LayerNorm). Tests mirror test/nn/module/ and use test.common helpers. A single-consumer block stays local to the model dir until a second model needs it.",
+    "expected_behavior": [
+      "Loads the physicsnemo-model-builder skill.",
+      "Classifies the request as a reusable layer (nn.Module building block), not a complete model.",
+      "Places it under physicsnemo/nn/module/ and wires re-exports from both nn/module/__init__.py and nn/__init__.py (MOD-000a).",
+      "Performs a reuse audit of physicsnemo.nn before reimplementing the block.",
+      "Scaffolds a physicsnemo.Module subclass with a JSON-serializable constructor and proposes tests under test/nn/module/ via test.common.",
+      "Every absolute path cited in the final message exists on disk."
+    ]
+  },
+  {
+    "id": "wrap-external-nested-module",
+    "question": "I want to wrap my trained PyTorch model in PhysicsNeMo, but its __init__ takes another nn.Module (an encoder) as an argument. Will from_checkpoint work?",
+    "expected_skill": "physicsnemo-model-builder",
+    "expected_script": null,
+    "ground_truth": "Module.from_torch wraps the outer nn.Module, but a raw nn.Module passed as an __init__ argument is NOT JSON-serializable, so save()/from_checkpoint raises TypeError (the __init__ args are captured as JSON). The fix is to convert the nested nn.Module argument itself via Module.from_torch first so the captured args are serializable, or refactor the constructor to take JSON-serializable config that builds the submodule internally. The fix must be proven with a validate_checkpoint save/load round-trip. This nested-Module case is the canonical serialization failure the skill exists to catch.",
+    "expected_behavior": [
+      "Loads the physicsnemo-model-builder skill.",
+      "Identifies the nested nn.Module __init__ argument as the serialization break (save/from_checkpoint raises TypeError).",
+      "Recommends converting the nested module via Module.from_torch (or a JSON-serializable config constructor) so the captured args serialize.",
+      "Recommends proving it with a validate_checkpoint round-trip.",
+      "Every absolute path cited in the final message exists on disk."
+    ]
+  },
+  {
+    "id": "out-of-scope-loss",
+    "question": "How do I add a new relative-L2 loss function to PhysicsNeMo?",
+    "expected_skill": null,
+    "expected_script": null,
+    "ground_truth": "Losses and metrics are out of scope for the model-builder skill, which covers complete models, reusable nn.Module layers, and wrapping external PyTorch models. A loss/metric belongs under physicsnemo/metrics/ (functional metrics in metrics/general). The skill should not activate and should redirect rather than scaffold a model/layer.",
+    "expected_behavior": [
+      "Does NOT load the physicsnemo-model-builder skill.",
+      "Recognizes a loss/metric as out of scope and redirects toward physicsnemo/metrics/.",
+      "Does not scaffold a physicsnemo.Module model or layer."
+    ]
+  },
+  {
+    "id": "out-of-scope-functional-op",
+    "question": "I want to add a fast k-nearest-neighbors operator with a Warp/cuML backend to PhysicsNeMo. How do I implement it?",
+    "expected_skill": null,
+    "expected_script": null,
+    "ground_truth": "Functional ops and their accelerated backends (Warp/cuML/SciPy via FunctionSpec) live in physicsnemo/nn/functional/, which is out of scope for the model-builder skill (that covers models, reusable nn.Module layers, and external-wrap). The skill should not activate and should redirect to the functional-ops surface rather than scaffold a model/layer.",
+    "expected_behavior": [
+      "Does NOT load the physicsnemo-model-builder skill.",
+      "Recognizes a functional op / accelerated backend as out of scope (physicsnemo/nn/functional/, FunctionSpec).",
+      "Does not scaffold a physicsnemo.Module model or layer."
+    ]
   }
 ]

@@ -64,3 +64,41 @@ variant, a custom tokenizer), keep it **local to the model directory**. Promote
 it to `physicsnemo/nn/module/` only when a **second** model wants it — premature
 generalization of a single-consumer layer is its own anti-pattern
 (`references/lessons.md`).
+
+## When a layer *almost* fits — extend `X`, subclass, or new module?
+
+A recurring, genuinely subjective decision (it shows up in most real model
+integrations): an existing `physicsnemo.nn` layer `X` does most of what you need
+but requires a change/extension `Y`. Resolve it in this order.
+
+1. **Reuse as-is.** Can `Y` be had through an existing constructor/forward
+   argument? Prefer configuration over code.
+2. **Subclass / compose / wrap `X` locally** — the **default** when `Y` is
+   model-specific. Put the variant in your model directory and override just the
+   piece you need. Reuses `X`'s internals, touches no shared surface, zero blast
+   radius. Promote to `physicsnemo.nn` later only if a second consumer appears.
+3. **Extend `X` in place** — allowed **only when both** hold:
+   - `Y` is **additive and backward-compatible**: a new *optional* argument whose
+     default reproduces `X`'s current behavior exactly (no existing caller
+     changes, no signature break).
+   - `Y` is **generally useful** to other models, not peculiar to yours.
+   Then it is its own small, CODEOWNERS-reviewed change to the shared primitive —
+   never a silent side effect of adding your model.
+4. **New local module** when `Y` diverges enough that subclassing is awkward and
+   it isn't general.
+
+**Hard rule:** never change `X`'s *existing* behavior or signature to fit your
+model — a shared primitive has many consumers, and that's a breaking change.
+
+**Additive vs. behavior-change — the litmus.** Adding a new optional
+`X(..., eps=1e-6)` kwarg that defaults to the old value → additive, extend `X`.
+Changing what `X` computes by default, reordering its ops, or altering an
+existing arg's meaning → behavior change: do **not** touch `X`; subclass locally.
+
+**When it's genuinely subjective** (touches a *stable*/shared API, or it's
+unclear whether `Y` is general), don't let the agent decide unilaterally. **Stop
+and present the maintainer two concrete, agent-drafted proposals** — e.g.
+*(A)* add optional `foo` to `X` (diff sketch + back-compat note) vs. *(B)* a
+local `MyX(X)` subclass (diff sketch) — with tradeoffs (blast radius, reuse,
+maintenance), and let them choose. Modifying core is a human-approved decision,
+not an autonomous edit.

@@ -123,6 +123,17 @@ patterns in `references/reuse_map.md`; verify each path before citing it. Say
 explicitly "import `X` from `physicsnemo.nn` instead of writing your own." Keep
 genuinely novel, model-specific pieces local to the model.
 
+**When a layer *almost* fits** (needs a tweak `Y`), prefer in order: reuse-as-is
+via config → **subclass/compose `X` locally** (the default when `Y` is
+model-specific) → an *additive, backward-compatible, generally-useful* extension
+to `X` as its own CODEOWNERS-reviewed change → a new local module. **Never change
+a shared primitive's existing behavior/signature to fit your model** — that
+breaks other consumers. If the call is genuinely subjective (touches a stable or
+shared API, or it's unclear whether `Y` is general), **stop and hand the
+maintainer two concrete proposals + tradeoffs** rather than editing core
+unilaterally. Full ladder + the additive-vs-behavior-change litmus:
+`references/reuse_map.md`.
+
 ### 4. Scaffold the shell
 
 Generate from the skeletons in `references/scaffolds.md`, adapting to the

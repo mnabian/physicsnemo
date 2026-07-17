@@ -505,9 +505,7 @@ def _all_reduce_grads(model: torch.nn.Module, world_size: int) -> None:
     # multi-GPU runs only — a single-vs-multi-GPU divergence. Skipping them
     # keeps the optimizer's per-parameter behavior identical to single-GPU.
     grads = [
-        p.grad
-        for p in model.parameters()
-        if p.requires_grad and p.grad is not None
+        p.grad for p in model.parameters() if p.requires_grad and p.grad is not None
     ]
     if not grads:
         return

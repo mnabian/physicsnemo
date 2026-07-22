@@ -64,11 +64,6 @@ num_workers: 8
 pin_memory: true
 prefetch_factor: 4
 
-# Shock-aware per-point loss weights from the field-gradient magnitude
-# (query_weight key; FlareJEPA R1 mitigation — see loss.recon.shock_weighting).
-include_query_weights: false
-query_weight_alpha: 1.0
-
 # Latent-value protocol knobs: restrict to a RAW-Mach band (or its
 # complement) and/or subsample the train split to N cases (few-shot).
 mach_range: null

@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Phase-2 JEPA training schedule for FlareJEPA on SuperWing (design doc §7
-# Phase 2): teacher-forced reconstruction + latent alignment + SIGReg.
+# Phase-2 JEPA training schedule for FlareJEPA on SuperWing:
+# teacher-forced reconstruction + latent alignment + SIGReg.
 # Inherits everything from the Phase-1 schedule; only the JEPA knobs differ.
 # Select with:  training=superwing_flarejepa_phase2
 

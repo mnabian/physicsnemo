@@ -16,7 +16,7 @@
 
 r"""Building-block layers for FlareJEPA.
 
-Design notes (see ``FLAREJEPA_DESIGN.md``):
+Design notes:
 
 - ``scale=1.0`` is a constraint on the *internals* of the reused
   :class:`~physicsnemo.experimental.nn.flare_attention.FLARE` /
@@ -61,7 +61,7 @@ class CondEmbed(nn.Module):
     r"""Fourier-feature + MLP embedding of global conditions (aoa, mach).
 
     Raw scalars are NOT fed directly: Mach nonlinearity in the transonic
-    regime warrants a richer embedding (design doc §4.3).
+    regime warrants a richer embedding than raw scalars.
 
     Forward: ``cond (B, cond_dim)`` -> ``(B, embed_dim)``.
     """
@@ -195,7 +195,7 @@ class CrossAttentionPool(nn.Module):
 class FlarePointBlock(nn.Module):
     r"""Pre-LN transformer block with FLARE attention over point tokens.
 
-    ``x = x + FLARE(norm(x)); x = x + MLP(norm(x))`` (design doc §4.1.3).
+    ``x = x + FLARE(norm(x)); x = x + MLP(norm(x))``.
     FLARE is reused untouched (``use_te=False``, its internal ``scale=1.0``).
     """
 

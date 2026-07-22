@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""FlareJEPA conditioning-sweep diagnostic (design doc §7 Phase 3).
+r"""FlareJEPA conditioning-sweep diagnostic.
 
 Fixes one test geometry and sweeps (aoa, mach) over the dataset's observed
 range, decoding the full surface field at each condition. Reports, per

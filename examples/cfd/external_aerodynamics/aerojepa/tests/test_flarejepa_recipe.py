@@ -465,7 +465,7 @@ def test_teacher_forced_recon_term_and_per_slot_sigreg():
 
 
 def test_per_slot_sigreg_sees_per_slot_constants():
-    # Audit C1 regression: the folded default flattens (B,S,C) into one
+    # Regression: the folded default flattens (B,S,C) into one
     # token pool and is blind to per-slot-constant collapse; the per_slot
     # path must NOT be equivalent (the wrapped transpose used to be a
     # silent no-op).

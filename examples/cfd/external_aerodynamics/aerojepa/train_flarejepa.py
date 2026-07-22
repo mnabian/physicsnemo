@@ -425,8 +425,8 @@ def _compute_total_loss(
     if z_tgt is not None:
         target = outputs["z_tgt_canonical"]
         # NOTE: compute_latent_loss's docstring describes AeroJEPA's joint
-        # (non-stop-grad) training. FlareJEPA defaults to stop_grad=true
-        # (design §6): the teacher trains via teacher-forced recon + SIGReg,
+        # (non-stop-grad) training. FlareJEPA defaults to stop_grad=true:
+        # the teacher trains via teacher-forced recon + SIGReg,
         # NOT via this term. Set loss.latent.stop_grad=false to reproduce
         # the AeroJEPA joint dynamics.
         if bool(loss_cfg.latent.get("stop_grad", True)):
@@ -439,13 +439,13 @@ def _compute_total_loss(
         )
         # SIGReg regularises the RAW teacher latent (pre-normalisation),
         # mirroring the AeroJEPA recipe.
-        # Audit H1: with per_slot=true the (B, S, C) latent is transposed
+        # With per_slot=true the (B, S, C) latent is transposed
         # to (S, B, C) so SIGReg enforces Gaussianity ACROSS SAMPLES per
         # slot — the default (slots folded into batch) is blind to
         # per-slot-constant collapse. The TokenLatentSIGReg WRAPPER must be
         # bypassed here: its reshape flattens any rank-3 input to
-        # (1, B*S, C), which silently undoes the transpose (audit C1 —
-        # the wrapped call was a no-op). Feed (S, B, C) straight into the
+        # (1, B*S, C), which silently undoes the transpose (the wrapped
+        # call would be a no-op). Feed (S, B, C) straight into the
         # SIGReg module so T=S groups survive. NOTE: SIGReg's internal
         # statistic scaling multiplies by the per-group sample count (B,
         # not B*S) — per-slot magnitudes are NOT comparable with the
@@ -466,7 +466,7 @@ def _compute_total_loss(
     tf_term = zeros
     tf_weight = float(loss_cfg.recon.get("teacher_forced_weight", 0.0))
     if tf_weight > 0.0 and outputs.get("field_pred_teacher") is not None:
-        # Audit C1 fix: field-ground the teacher — decode the canonical
+        # Field-ground the teacher — decode the canonical
         # teacher latent too and take a (small) recon loss on it, so the
         # latent target must carry field information even when the main
         # decode path is decode_from=predictor.
@@ -539,8 +539,8 @@ def _run_epoch(
     normalize_target = bool(loss_cfg.latent.get("normalize_target", True))
 
     # z_std: mean per-channel std of the RAW teacher latent across all
-    # tokens in the batch — the collapse diagnostic (design doc §7 Phase 2:
-    # SIGReg must keep slot variance non-degenerate; z_std -> 0 is collapse).
+    # tokens in the batch — the collapse diagnostic (SIGReg must keep slot
+    # variance non-degenerate; z_std -> 0 is collapse).
     # Reported as 0 when the target encoder does not run.
     totals = {
         k: torch.zeros((), device=device, dtype=torch.float64)
@@ -588,7 +588,7 @@ def _run_epoch(
 
         skip_step = False
         if is_train and spike_guard_state is not None:
-            # Loss-spike guard (R4 post-mortem: one spike at ~ep137 tipped
+            # Loss-spike guard (empirically, one spike tipped
             # the joint teacher/student system into the latent-collapse
             # basin permanently). Decision uses the GLOBALLY-averaged loss
             # so every rank skips identically (optimizer states stay in
@@ -657,7 +657,7 @@ def _run_epoch(
             totals["z_std"] += (
                 z.reshape(-1, z.shape[-1]).float().std(dim=0).mean().double()
             )
-            # Audit H1: cross-SAMPLE std per (slot, channel) — the collapse
+            # Cross-SAMPLE std per (slot, channel) — the collapse
             # mode z_std cannot see (per-slot constants keep z_std healthy
             # while carrying zero per-sample information).
             if z.shape[0] > 1:
@@ -1060,7 +1060,7 @@ def main(cfg: DictConfig) -> None:
                     cfg=cfg,
                 )
 
-        # Audit M2: the warmup-weighted total val loss changes meaning
+        # The warmup-weighted total val loss changes meaning
         # every epoch during warmup; select_on=recon selects on the pure
         # (inference-relevant) reconstruction metric instead.
         select_key = str(cfg.training.get("select_on", "loss"))

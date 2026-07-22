@@ -63,3 +63,9 @@ val_return_origingeom: true
 num_workers: 8
 pin_memory: true
 prefetch_factor: 4
+
+# Per-point surface normals + gradient-based query weights (FlareJEPA keys,
+# mirroring conf/data/superwing.yaml; AeroJEPA ignores them).
+include_normals: false
+include_query_weights: false
+query_weight_alpha: 1.0

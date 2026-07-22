@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Phase-2 JEPA training schedule for FlareJEPA on SuperWing (design doc §7
+# Phase 2): teacher-forced reconstruction + latent alignment + SIGReg.
+# Inherits everything from the Phase-1 schedule; only the JEPA knobs differ.
+# Select with:  training=superwing_flarejepa_phase2
+
+defaults:
+  - superwing_flarejepa
+  - _self_
+
+# Teacher-forced reconstruction: the decoder consumes the CANONICAL
+# (LayerNorm-normalised) teacher latent — the same tensor the latent loss
+# regresses Z_hat toward — so inference decode(Z_hat) stays consistent.
+decode_from: target
+
+loss:
+  # JEPA latent alignment: Z_hat -> stop-grad LayerNorm(Z_tgt), MSE+cosine,
+  # warmed up over 5 epochs (recipe convention).
+  latent:
+    weight: 1.0
+
+  # SIGReg anti-collapse on the RAW teacher latent, warmed up alongside.
+  sigreg:
+    weight: 1.0e-2

@@ -14,18 +14,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .superwing import (
-    SuperWingDataset,
-    compute_grid_normals,
-    superwing_collate,
+from ._metadata import FlareJEPAMetaData
+from .decoder import Decoder
+from .encoders import GeometryEncoder, TargetEncoder
+from .flarejepa import FlareJEPA
+from .layers import (
+    CondEmbed,
+    CondGALEBlock,
+    CrossAttentionPool,
+    FlarePointBlock,
+    SlotReadCrossAttentionBlock,
+    SlotSelfAttentionBlock,
+    reshape_context,
 )
-from .superwing_normalization import compute_superwing_normalization_stats
-from .superwing_split import build_superwing_split_manifest
+from .predictor import Predictor
 
 __all__ = [
-    "SuperWingDataset",
-    "build_superwing_split_manifest",
-    "compute_grid_normals",
-    "compute_superwing_normalization_stats",
-    "superwing_collate",
+    "CondEmbed",
+    "CondGALEBlock",
+    "CrossAttentionPool",
+    "Decoder",
+    "FlareJEPA",
+    "FlareJEPAMetaData",
+    "FlarePointBlock",
+    "GeometryEncoder",
+    "Predictor",
+    "SlotReadCrossAttentionBlock",
+    "SlotSelfAttentionBlock",
+    "TargetEncoder",
+    "reshape_context",
 ]

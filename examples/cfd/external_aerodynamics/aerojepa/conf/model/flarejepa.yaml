@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# FlareJEPA model config. Nested dicts require _convert_: all so they
+# reach the ctor as native dicts (mdlus-serialisable).
+
+_target_: physicsnemo.experimental.models.flarejepa.FlareJEPA
+_convert_: all
+slots: 128            # S
+token_dim: 256        # C
+heads: 8              # H  (dim_head = token_dim / heads = 32)
+cond_dim: 2           # aoa, mach (raw); embedded via Fourier+MLP
+cond_embed_dim: 64
+out_dim: 3            # Cp, Cf_tau, Cf_z
+pe_bands: 16
+geometry_encoder:
+  flare_layers: 4
+  slot_layers: 2
+  pool_repeats: 1     # extra pool<->slot rounds (Perceiver repeats)
+target_encoder:
+  flare_layers: 0     # point-level blocks BEFORE the pool
+  gale_layers: 4
+  state_mixing_mode: weighted
+  # false removes the teacher's z_ctx cross-attention (copy-proof teacher:
+  # the JEPA target CANNOT copy the geometry latent); slots refined by
+  # self-attention instead of GALE context blocks.
+  context_cross: true
+predictor:
+  gale_layers: 6
+  state_mixing_mode: weighted
+  init_from_context: true
+decoder:
+  cross_layers: 4
+  query_chunk_size: 4096
+  head_mlp_ratio: 1    # 1 = narrow head; 4 = interior-MLP width
+  point_read: false    # dual-read decode — queries also kNN-read the
+  point_neighbor_k: 8  #     geometry encoder's pre-pool point tokens
+  use_cond: true       # false = cond-blind decoder: (aoa,mach) reaches the
+                       # field ONLY via the predictor latent (causal probe)
+use_normals: true
+use_sdf: false
+# Tie teacher slot queries to the geometry encoder's — gives the latent
+# loss a slot correspondence (slot i = query i, both sides).
+share_slot_queries: false
+mlp_ratio: 4
+dropout: 0.0

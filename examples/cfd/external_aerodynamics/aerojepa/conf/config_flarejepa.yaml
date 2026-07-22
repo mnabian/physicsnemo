@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# FlareJEPA entry-point config. Usage:
+#   python train_flarejepa.py data.path=/path/to/SuperWing_Dataset
+
+defaults:
+  - data: superwing
+  - model: flarejepa
+  - training: superwing_flarejepa
+  - _self_
+
+# FlareJEPA consumes surface normals by default (model.use_normals=true);
+# the datapipe must emit them.
+data:
+  include_normals: true
+
+seed: 42
+device: cuda
+
+output_dir: outputs
+
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

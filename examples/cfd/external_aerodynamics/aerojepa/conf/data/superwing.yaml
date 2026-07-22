@@ -46,6 +46,10 @@ query_points: 4096
 # Normalization.
 normalize_xyz: true
 
+# Per-point unit surface normals (context_normals / target_surface_normals).
+# Consumed by the FlareJEPA recipe (train_flarejepa.py); AeroJEPA ignores them.
+include_normals: false
+
 # Sampling determinism.
 train_deterministic_sampling: false
 eval_deterministic_sampling: true
@@ -59,3 +63,15 @@ val_return_origingeom: true
 num_workers: 8
 pin_memory: true
 prefetch_factor: 4
+
+# Shock-aware per-point loss weights from the field-gradient magnitude
+# (query_weight key; FlareJEPA R1 mitigation — see loss.recon.shock_weighting).
+include_query_weights: false
+query_weight_alpha: 1.0
+
+# Latent-value protocol knobs: restrict to a RAW-Mach band (or its
+# complement) and/or subsample the train split to N cases (few-shot).
+mach_range: null
+mach_range_invert: false
+max_train_samples: null
+subset_seed: 0

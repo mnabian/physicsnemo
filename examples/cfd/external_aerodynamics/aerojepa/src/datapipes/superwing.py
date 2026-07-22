@@ -61,6 +61,42 @@ SUPERWING_ORIGIN_GRID_SHAPE: tuple[int, int] = (129, 257)
 SUPERWING_INDEX_NUM_COLS: int = 12
 
 
+def compute_grid_normals(geom_chw: np.ndarray) -> np.ndarray:
+    r"""Per-point unit surface normals from a structured surface grid.
+
+    Uses central-difference tangents along the two grid axes and their
+    cross product. Computed on the **raw** (unnormalised) geometry so the
+    normals are true unit vectors — min-max xyz normalisation is
+    anisotropic and would distort directions. The global sign convention
+    follows the grid orientation (consistent across the surface, which is
+    what a learned model needs; an overall flip is immaterial).
+
+    Parameters
+    ----------
+    geom_chw : np.ndarray
+        Structured surface mesh of shape ``(3, H, W)``.
+
+    Returns
+    -------
+    np.ndarray
+        Unit normals of shape ``(H * W, 3)`` (float32), flattened in the
+        same row-major order as ``geom_chw.reshape(3, -1).T``. Degenerate
+        cells (zero-area, e.g. a collapsed tip) get a zero normal.
+    """
+    if geom_chw.ndim != 3 or geom_chw.shape[0] != 3:
+        raise ValueError(
+            f"Expected geometry of shape (3, H, W), got {tuple(geom_chw.shape)}"
+        )
+    g = geom_chw.astype(np.float64, copy=False)
+    # Tangents along the two structured axes: (3, H, W) each.
+    t_i = np.gradient(g, axis=1)
+    t_j = np.gradient(g, axis=2)
+    n = np.cross(t_i, t_j, axisa=0, axisb=0, axisc=0)  # (3, H, W)
+    norm = np.linalg.norm(n, axis=0, keepdims=True)
+    n = np.where(norm > 1e-12, n / np.maximum(norm, 1e-12), 0.0)
+    return n.reshape(3, -1).T.astype(np.float32)
+
+
 @dataclass(frozen=True)
 class SuperWingPaths:
     """File-path helper for a SuperWing root directory."""
@@ -182,6 +218,11 @@ class SuperWingDataset(Dataset):
     normalize_xyz : bool, optional
         Min-max normalise xyz into ``[-1, 1]`` using the stats. Default
         ``True``.
+    include_normals : bool, optional
+        Emit per-point unit surface normals (computed on the raw grid via
+        :func:`compute_grid_normals`) as ``context_normals`` ``(N_ctx, 3)``
+        and ``target_surface_normals`` ``(N_tgt, 3)``. Used by the
+        FlareJEPA recipe; AeroJEPA ignores them. Default ``False``.
     """
 
     def __init__(
@@ -200,6 +241,11 @@ class SuperWingDataset(Dataset):
         return_full_fields: bool = False,
         deterministic_sampling: bool = True,
         normalize_xyz: bool = True,
+        include_normals: bool = False,
+        mach_range: tuple[float, float] | list[float] | None = None,
+        mach_range_invert: bool = False,
+        max_samples: int | None = None,
+        subset_seed: int = 0,
     ) -> None:
         super().__init__()
         if split not in {"train", "val", "test", "all"}:
@@ -231,6 +277,35 @@ class SuperWingDataset(Dataset):
             raise ValueError(
                 f"Split '{split}' is empty in manifest {split_manifest_path}"
             )
+
+        # Condition-band filter + few-shot subsetting (latent-value
+        # protocol): restrict samples to a RAW-Mach band (or its
+        # complement), then optionally draw a fixed-size random subset.
+        if mach_range is not None:
+            lo, hi = float(mach_range[0]), float(mach_range[1])
+            idx_arr = np.load(SuperWingPaths(root_dir=root_dir).index)
+            mach_all = idx_arr[:, 3].astype(np.float64)
+            keep = []
+            for si in self.sample_indices:
+                inside = lo <= mach_all[si] <= hi
+                if inside != mach_range_invert:
+                    keep.append(si)
+            if not keep:
+                raise ValueError(
+                    f"mach_range={mach_range} (invert={mach_range_invert}) "
+                    f"leaves no '{split}' samples"
+                )
+            self.sample_indices = keep
+        if max_samples is not None and int(max_samples) < len(
+            self.sample_indices
+        ):
+            rng = np.random.default_rng(int(subset_seed))
+            chosen = rng.choice(
+                len(self.sample_indices), size=int(max_samples), replace=False
+            )
+            self.sample_indices = [
+                self.sample_indices[int(i)] for i in sorted(chosen)
+            ]
 
         if normalization_stats is None:
             if normalization_stats_path is None:
@@ -272,6 +347,7 @@ class SuperWingDataset(Dataset):
         self.return_full_fields = bool(return_full_fields)
         self.deterministic_sampling = bool(deterministic_sampling)
         self.normalize_xyz = bool(normalize_xyz)
+        self.include_normals = bool(include_normals)
 
         # Memmap handles are created lazily so DataLoader workers fork
         # without inheriting open file descriptors.
@@ -418,6 +494,10 @@ class SuperWingDataset(Dataset):
                 dtype=torch.float32,
             ),
         }
+        if self.include_normals:
+            normals_full = compute_grid_normals(geom_chw)
+            out["context_normals"] = torch.from_numpy(normals_full[s_idx])
+            out["target_surface_normals"] = torch.from_numpy(normals_full[t_idx])
         if self.return_full_fields:
             out["target_full"] = torch.from_numpy(data_chw)
             out["target_full_normalized"] = torch.from_numpy(
@@ -437,8 +517,10 @@ _VARIABLE_KEYS: frozenset[str] = frozenset(
     {
         "context_pos",
         "context_feat",
+        "context_normals",
         "target_surface_pos",
         "target_surface_main_feat",
+        "target_surface_normals",
         "target_volume_pos",
         "target_volume_feat",
         "query_pos",

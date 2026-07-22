@@ -115,6 +115,8 @@ def build_lr_scheduler(
     warmup_epochs: float = 5.0,
     warmup_steps: int | None = None,
     min_lr_ratio: float = 0.05,
+    step_size_epochs: int = 100,
+    gamma: float = 0.5,
 ) -> torch.optim.lr_scheduler.LambdaLR | None:
     r"""Build a learning-rate scheduler.
 
@@ -157,6 +159,20 @@ def build_lr_scheduler(
     name_l = str(name).lower()
     if name_l in {"none", "constant"}:
         return None
+    if name_l == "step":
+        # Epoch-granular StepLR (the transformer_models reference recipe:
+        # StepLR(step_size=100, gamma=0.5)) expressed as a per-step
+        # LambdaLR so the recipe's per-step stepping works unchanged.
+        spe = max(1, int(steps_per_epoch))
+        size = max(1, int(step_size_epochs))
+        g = float(gamma)
+
+        def _step_lambda(step: int) -> float:
+            return g ** (int(step) // spe // size)
+
+        return torch.optim.lr_scheduler.LambdaLR(
+            optimizer, lr_lambda=_step_lambda
+        )
     if name_l != "warmup_cosine":
         raise ValueError(f"Unsupported lr scheduler: {name!r}")
 

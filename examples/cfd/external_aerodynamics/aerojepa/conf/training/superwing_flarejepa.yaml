@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Training schedule for FlareJEPA on SuperWing (dense-batched recipe,
+# train_flarejepa.py). Mirrors conf/training/superwing.yaml where shared;
+# FlareJEPA-specific keys are marked.
+
+epochs: 200
+batch_size: 4          # dense batching is the point of FlareJEPA (fixed shapes)
+eval_batch_size: 1     # full-grid queries (128*256) at eval
+max_eval_batches: 16
+precision: bf16
+save_every_epochs: 50
+
+log_every: 50
+max_train_batches: null
+
+profile: false
+profile_steps: 12
+
+# FlareJEPA: which latent feeds the decoder during training.
+#   predictor — end-to-end supervised path (Phase 1 gate; also final JEPA
+#               inference path).
+#   target    — teacher-forced reconstruction (Phase 2+ default in the
+#               design doc §6); requires the latent/SIGReg terms to be
+#               active so the target encoder trains.
+decode_from: predictor
+
+# Overfit-one-batch acceptance gate (design doc §7 Phase 1): train on the
+# first batch only, repeated `max_train_batches` times per epoch; val is
+# skipped. Loss must approach ~0.
+overfit_one_batch: false
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-3
+  weight_decay: 1.0e-3
+  betas: [0.9, 0.95]
+  # Gap-audit: true = no weight decay on 1-D params (norm gains, biases,
+  # AdaLN gates) and learned queries/temperatures. Consumed by
+  # build_optimizer, stripped before the ctor.
+  no_decay_norms_and_gains: false
+  # true = Muon on all 2-D weights (match_rms_adamw) + this optimizer on
+  # the rest (transformer_models reference recipe; CombinedOptimizer).
+  muon_2d: false
+
+scheduler:
+  name: warmup_cosine   # warmup_cosine | step | none
+  warmup_epochs: 2
+  # step-schedule params (used when name=step; reference GTS recipe):
+  step_size_epochs: 100
+  gamma: 0.5
+
+grad_clip_norm: 10.0
+# Loss-spike guard (R4 post-mortem: one spike tipped the joint system into
+# the latent-collapse basin permanently). factor 0 = off. When on, steps
+# with globally-averaged loss > factor x running EMA are skipped.
+spike_guard:
+  factor: 0.0
+  ema_beta: 0.98
+  # Must outlast the latent/SIGReg term-weight warmup (5 epochs ~ 2400
+  # steps at batch 48) — the ramp is a legitimate loss increase.
+  warmup_steps: 3000
+# Audit M2: metric for best-checkpoint selection: loss (legacy,
+# warmup-weighted total) | recon (pure reconstruction).
+select_on: loss
+# Few-shot transfer: freeze all params except those with a listed name
+# prefix (e.g. ["decoder.head"]). null = train everything.
+freeze_except: null
+
+ema:
+  enabled: true
+  decay: 0.999
+
+loss:
+  recon:
+    kind: relative_l2_mse
+    relative_mse_mode: pointwise
+    eps: 1.0e-2
+    relative_l2_weight: 1.0
+    mse_weight: 0.2
+    weight: 1.0
+    warmup_epochs: 0
+    # Audit C1 fix: >0 adds an auxiliary teacher-forced decode + recon term
+    # (weight is relative to the recon weight) so the teacher latent must
+    # carry field information even with decode_from=predictor.
+    teacher_forced_weight: 0.0
+
+  # JEPA latent alignment (weight 0 = Phase 1 supervised gate; the target
+  # encoder is skipped entirely when latent+sigreg are all 0).
+  latent:
+    weight: 0.0
+    mse_weight: 0.5
+    cosine_weight: 0.5
+    warmup_epochs: 5
+    # FlareJEPA design (§6): stop-grad teacher + LayerNorm-normalised target.
+    # Set both false to reproduce AeroJEPA's joint (non-stop-grad) training.
+    stop_grad: true
+    normalize_target: true
+
+  sigreg:
+    weight: 0.0
+    warmup_epochs: 5
+    knots: 17
+    num_proj: 1024
+    # Audit H1: true = transpose (B,S,C)->(S,B,C) so Gaussianity is
+    # enforced ACROSS SAMPLES per slot (catches per-slot-constant
+    # collapse, which the folded default cannot see).
+    per_slot: false
+
+resume:
+  enabled: false
+  checkpoint_path: null
+  strict: true
+  load_optimizer: true
+  load_scheduler: true
+
+init_from_checkpoint:
+  path: null
+  strict: true
+
+# Phase-4 knobs: in-place torch.compile of all submodules (state_dict keys
+# unchanged — checkpoints stay interchangeable with eager runs), and one-time
+# FLOP counting for the Mean TFLOP/s epoch report.
+compile: false
+report_tflops: false

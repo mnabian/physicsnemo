@@ -8,7 +8,7 @@
 
 epochs: 200
 batch_size: 4          # dense batching is the point of FlareJEPA (fixed shapes)
-eval_batch_size: 1     # full-grid queries (128*256) at eval
+eval_batch_size: 2     # >=2 required for z_xstd collapse diagnostic; chunked decode handles memory
 max_eval_batches: 16
 precision: bf16
 save_every_epochs: 50
@@ -39,7 +39,7 @@ optimizer:
   # Gap-audit: true = no weight decay on 1-D params (norm gains, biases,
   # AdaLN gates) and learned queries/temperatures. Consumed by
   # build_optimizer, stripped before the ctor.
-  no_decay_norms_and_gains: false
+  no_decay_norms_and_gains: true
   # true = Muon on all 2-D weights (match_rms_adamw) + this optimizer on
   # the rest (transformer_models reference recipe; CombinedOptimizer).
   muon_2d: false
@@ -51,19 +51,19 @@ scheduler:
   step_size_epochs: 100
   gamma: 0.5
 
-grad_clip_norm: 10.0
+grad_clip_norm: 1.0
 # Loss-spike guard (empirically, one spike tipped the joint system into
 # the latent-collapse basin permanently). factor 0 = off. When on, steps
 # with globally-averaged loss > factor x running EMA are skipped.
 spike_guard:
-  factor: 0.0
+  factor: 3.0
   ema_beta: 0.98
   # Must outlast the latent/SIGReg term-weight warmup (5 epochs ~ 2400
   # steps at batch 48) — the ramp is a legitimate loss increase.
   warmup_steps: 3000
 # Metric for best-checkpoint selection: loss (legacy,
 # warmup-weighted total) | recon (pure reconstruction).
-select_on: loss
+select_on: recon
 # Few-shot transfer: freeze all params except those with a listed name
 # prefix (e.g. ["decoder.head"]). null = train everything.
 freeze_except: null
@@ -75,7 +75,7 @@ ema:
 loss:
   recon:
     kind: relative_l2_mse
-    relative_mse_mode: pointwise
+    relative_mse_mode: channel_energy
     eps: 1.0e-2
     relative_l2_weight: 1.0
     mse_weight: 0.2
@@ -106,7 +106,7 @@ loss:
     # true = transpose (B,S,C)->(S,B,C) so Gaussianity is
     # enforced ACROSS SAMPLES per slot (catches per-slot-constant
     # collapse, which the folded default cannot see).
-    per_slot: false
+    per_slot: true
 
 resume:
   enabled: false

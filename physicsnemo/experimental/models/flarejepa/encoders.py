@@ -80,10 +80,13 @@ class _SlotPool(nn.Module):
         slots: int,
         mlp_ratio: int,
         dropout: float,
+        adaptive_temp: bool = False,
     ) -> None:
         super().__init__()
         self.slot_queries = nn.Parameter(torch.randn(1, slots, token_dim) * 0.02)
-        self.pool = CrossAttentionPool(token_dim, heads, mlp_ratio, dropout)
+        self.pool = CrossAttentionPool(
+            token_dim, heads, mlp_ratio, dropout, adaptive_temp=adaptive_temp
+        )
 
     def forward(
         self, tokens: Float[torch.Tensor, "B N C"]
@@ -126,6 +129,7 @@ class GeometryEncoder(Module):
         pool_repeats: int = 1,
         mlp_ratio: int = 4,
         dropout: float = 0.0,
+        pool_adaptive_temp: bool = False,
     ) -> None:
         super().__init__(meta=FlareJEPAMetaData())
         if pool_repeats < 1:
@@ -136,13 +140,19 @@ class GeometryEncoder(Module):
             FlarePointBlock(token_dim, heads, slots, mlp_ratio, dropout)
             for _ in range(flare_layers)
         )
-        self.slot_pool = _SlotPool(token_dim, heads, slots, mlp_ratio, dropout)
+        self.slot_pool = _SlotPool(
+            token_dim, heads, slots, mlp_ratio, dropout,
+            adaptive_temp=pool_adaptive_temp,
+        )
         self.slot_blocks = nn.ModuleList(
             SlotSelfAttentionBlock(token_dim, heads, mlp_ratio, dropout)
             for _ in range(slot_layers)
         )
         self.repool = nn.ModuleList(
-            CrossAttentionPool(token_dim, heads, mlp_ratio, dropout)
+            CrossAttentionPool(
+                token_dim, heads, mlp_ratio, dropout,
+                adaptive_temp=pool_adaptive_temp,
+            )
             for _ in range(pool_repeats - 1)
         )
         self.repool_slot_blocks = nn.ModuleList(
@@ -210,6 +220,7 @@ class TargetEncoder(Module):
         dropout: float = 0.0,
         state_mixing_mode: str = "weighted",
         context_cross: bool = True,
+        pool_adaptive_temp: bool = False,
     ) -> None:
         super().__init__(meta=FlareJEPAMetaData())
         self.heads = heads
@@ -221,7 +232,10 @@ class TargetEncoder(Module):
             FlarePointBlock(token_dim, heads, slots, mlp_ratio, dropout)
             for _ in range(flare_layers)
         )
-        self.slot_pool = _SlotPool(token_dim, heads, slots, mlp_ratio, dropout)
+        self.slot_pool = _SlotPool(
+            token_dim, heads, slots, mlp_ratio, dropout,
+            adaptive_temp=pool_adaptive_temp,
+        )
         if context_cross:
             self.blocks = nn.ModuleList(
                 CondGALEBlock(

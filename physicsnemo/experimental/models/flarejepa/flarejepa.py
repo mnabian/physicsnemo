@@ -105,6 +105,7 @@ class FlareJEPA(Module):
         decoder: dict | None = None,
         mlp_ratio: int = 4,
         dropout: float = 0.0,
+        pool_adaptive_temp: bool = False,
         share_slot_queries: bool = False,
     ) -> None:
         super().__init__(meta=FlareJEPAMetaData())
@@ -149,6 +150,7 @@ class FlareJEPA(Module):
             pool_repeats=geometry_encoder.get("pool_repeats", 1),
             mlp_ratio=mlp_ratio,
             dropout=dropout,
+            pool_adaptive_temp=pool_adaptive_temp,
         )
         self.target_encoder = TargetEncoder(
             in_dim=tgt_in_dim,
@@ -162,6 +164,7 @@ class FlareJEPA(Module):
             dropout=dropout,
             state_mixing_mode=target_encoder.get("state_mixing_mode", "weighted"),
             context_cross=target_encoder.get("context_cross", True),
+            pool_adaptive_temp=pool_adaptive_temp,
         )
         self.predictor = Predictor(
             token_dim=token_dim,
@@ -187,6 +190,7 @@ class FlareJEPA(Module):
             query_chunk_size=decoder.get("query_chunk_size", 4096),
             point_read=decoder.get("point_read", False),
             point_neighbor_k=decoder.get("point_neighbor_k", 8),
+            point_dilations=decoder.get("point_dilations", None),
         )
         self.decoder_point_read = bool(decoder.get("point_read", False))
 

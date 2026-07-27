@@ -501,6 +501,40 @@ def _compute_term_weights(epoch: int, loss_cfg: DictConfig) -> dict[str, float]:
 # --------------------------------------------------------------------------- #
 
 
+_SURFACE_FIELD_METRIC_KEYS = (
+    "l2_pressure_surf", "l2_shear_x", "l2_shear_y", "l2_shear_z",
+    "l1_pressure_surf", "l1_shear_x", "l1_shear_y", "l1_shear_z",
+)
+
+
+def _surface_field_metrics(
+    pred: torch.Tensor, target: torch.Tensor
+) -> dict[str, torch.Tensor]:
+    """Per-channel relative L2/L1 on un-normalised ``(B, N, 4)`` surface fields.
+
+    Mirrors ``transformer_models/src/metrics.py::metrics_fn_surface``: the L2
+    reduction is ``sqrt(sum_N (pred-target)^2) / sqrt(sum_N target^2)`` per
+    channel, meaned over the batch (the cross-rank mean-of-means is handled by
+    the same SUM/n reduction as every other metric in ``_run_epoch``).
+    """
+    l2 = torch.sqrt(((pred - target) ** 2).sum(dim=1)) / torch.sqrt(
+        (target ** 2).sum(dim=1)
+    ).clamp_min(1e-12)
+    l1 = torch.abs(pred - target).sum(dim=1) / torch.abs(target).sum(
+        dim=1
+    ).clamp_min(1e-12)
+    return {
+        "l2_pressure_surf": l2[:, 0].mean(),
+        "l2_shear_x": l2[:, 1].mean(),
+        "l2_shear_y": l2[:, 2].mean(),
+        "l2_shear_z": l2[:, 3].mean(),
+        "l1_pressure_surf": l1[:, 0].mean(),
+        "l1_shear_x": l1[:, 1].mean(),
+        "l1_shear_y": l1[:, 2].mean(),
+        "l1_shear_z": l1[:, 3].mean(),
+    }
+
+
 def _run_epoch(
     *,
     model: torch.nn.Module,
@@ -525,6 +559,7 @@ def _run_epoch(
     log_every: int = 50,
     world_size: int = 1,
     is_main: bool = True,
+    field_metric_factors: dict | None = None,
 ) -> dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -547,6 +582,12 @@ def _run_epoch(
         for k in ("loss", "recon", "latent", "sigreg", "recon_tf",
                   "z_std", "z_xstd")
     }
+    # GeoTransolver-comparable per-channel rel-L2/L1 (val only, DrivAer only —
+    # requires the mean/std factors to un-normalise fields to physical units).
+    compute_field_metrics = field_metric_factors is not None and not is_train
+    if compute_field_metrics:
+        for k in _SURFACE_FIELD_METRIC_KEYS:
+            totals[k] = torch.zeros((), device=device, dtype=torch.float64)
     n_batches = 0
     phase_tag = "train" if is_train else "val"
     step_time = time.time()
@@ -662,6 +703,16 @@ def _run_epoch(
             # while carrying zero per-sample information).
             if z.shape[0] > 1:
                 totals["z_xstd"] += z.float().std(dim=0).mean().double()
+        if compute_field_metrics:
+            # Un-normalise (standardised -> physical) with the shared mean/std,
+            # then per-channel rel-L2/L1 exactly as GeoTransolver reports.
+            mean = field_metric_factors["mean"]
+            std = field_metric_factors["std"]
+            fp_phys = outputs["field_pred"].detach().float() * std + mean
+            tgt_phys = batch["query_target"].float() * std + mean
+            fm = _surface_field_metrics(fp_phys, tgt_phys)
+            for k in _SURFACE_FIELD_METRIC_KEYS:
+                totals[k] += fm[k].double()
         n_batches += 1
 
         now = time.time()
@@ -753,33 +804,58 @@ def main(cfg: DictConfig) -> None:
             "desynchronise ranks). Use bf16."
         )
 
-    if is_main:
-        split_path, stats_path = _ensure_superwing_artifacts(cfg.data)
-    if world_size > 1:
-        dist.barrier()
-    if not is_main:
-        split_path, stats_path = _ensure_superwing_artifacts(cfg.data)
+    # Data source dispatch: SuperWing (default) or the DrivAerML adapter that
+    # reuses GeoTransolver's TransolverDataPipe. The DrivAer path needs no
+    # SuperWing split/stats artifacts.
+    _is_drivaer = str(cfg.data.get("source", "superwing")) == "drivaer"
 
-    train_loader, train_sampler = _build_loader(
-        cfg.data,
-        split="train",
-        split_manifest_path=split_path,
-        normalization_stats_path=stats_path,
-        batch_size=int(cfg.training.batch_size),
-        shuffle=True,
-        world_size=world_size,
-        rank=dm.rank,
-    )
-    val_loader, _ = _build_loader(
-        cfg.data,
-        split="val",
-        split_manifest_path=split_path,
-        normalization_stats_path=stats_path,
-        batch_size=int(cfg.training.eval_batch_size),
-        shuffle=False,
-        world_size=world_size,
-        rank=dm.rank,
-    )
+    if _is_drivaer:
+        from src.datapipes.drivaer_flarejepa import build_drivaer_flarejepa_loader
+
+        train_loader, train_sampler = build_drivaer_flarejepa_loader(
+            cfg.data,
+            split="train",
+            batch_size=int(cfg.training.batch_size),
+            shuffle=True,
+            world_size=world_size,
+            rank=dm.rank,
+        )
+        val_loader, _ = build_drivaer_flarejepa_loader(
+            cfg.data,
+            split="val",
+            batch_size=int(cfg.training.eval_batch_size),
+            shuffle=False,
+            world_size=world_size,
+            rank=dm.rank,
+        )
+    else:
+        if is_main:
+            split_path, stats_path = _ensure_superwing_artifacts(cfg.data)
+        if world_size > 1:
+            dist.barrier()
+        if not is_main:
+            split_path, stats_path = _ensure_superwing_artifacts(cfg.data)
+
+        train_loader, train_sampler = _build_loader(
+            cfg.data,
+            split="train",
+            split_manifest_path=split_path,
+            normalization_stats_path=stats_path,
+            batch_size=int(cfg.training.batch_size),
+            shuffle=True,
+            world_size=world_size,
+            rank=dm.rank,
+        )
+        val_loader, _ = _build_loader(
+            cfg.data,
+            split="val",
+            split_manifest_path=split_path,
+            normalization_stats_path=stats_path,
+            batch_size=int(cfg.training.eval_batch_size),
+            shuffle=False,
+            world_size=world_size,
+            rank=dm.rank,
+        )
     if is_main:
         log.info(
             "Train / val samples: %d / %d",
@@ -953,6 +1029,14 @@ def main(cfg: DictConfig) -> None:
                 spike_guard_state["warmup"],
             )
 
+    # DrivAer only: mean/std factors to un-normalise fields for the
+    # GeoTransolver-comparable per-channel rel-L2/L1 validation metrics.
+    field_metric_factors = (
+        getattr(val_loader.dataset, "surface_factors", None)
+        if _is_drivaer
+        else None
+    )
+
     for epoch in range(start_epoch, int(cfg.training.epochs)):
         t0 = time.time()
         if train_sampler is not None:
@@ -1017,6 +1101,7 @@ def main(cfg: DictConfig) -> None:
                     log_every=log_every,
                     world_size=world_size,
                     is_main=is_main,
+                    field_metric_factors=field_metric_factors,
                 )
             finally:
                 if ema is not None:
@@ -1040,6 +1125,26 @@ def main(cfg: DictConfig) -> None:
                 optimizer.param_groups[0]["lr"],
                 train_time,
             )
+            if field_metric_factors is not None and all(
+                k in val_metrics for k in _SURFACE_FIELD_METRIC_KEYS
+            ):
+                # GeoTransolver-comparable per-channel validation error
+                # (un-normalised rel-L2/L1), same channels/formula as GTS's
+                # "Validation Average Metrics" table.
+                log.info(
+                    "epoch=%03d val rel-L2  p=%.4f  tau_x=%.4f  tau_y=%.4f  "
+                    "tau_z=%.4f  | rel-L1  p=%.4f  tau_x=%.4f  tau_y=%.4f  "
+                    "tau_z=%.4f",
+                    epoch,
+                    val_metrics["l2_pressure_surf"],
+                    val_metrics["l2_shear_x"],
+                    val_metrics["l2_shear_y"],
+                    val_metrics["l2_shear_z"],
+                    val_metrics["l1_pressure_surf"],
+                    val_metrics["l1_shear_x"],
+                    val_metrics["l1_shear_y"],
+                    val_metrics["l1_shear_z"],
+                )
             if flops_fwd_per_step is not None and train_time > 0:
                 tflops = 3 * flops_fwd_per_step * epoch_len / train_time / 1e12
                 log.info("Mean throughput: %.2f TFLOP/s", tflops)

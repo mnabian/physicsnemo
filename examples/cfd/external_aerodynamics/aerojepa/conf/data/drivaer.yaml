@@ -1,0 +1,58 @@
+# DrivAerML surface data for FlareJEPA, via GeoTransolver's TransolverDataPipe.
+# The `source: drivaer` flag routes train_flarejepa.py to
+# build_drivaer_flarejepa_loader (src/datapipes/drivaer_flarejepa.py), which
+# reuses the exact CAEDataset reader + mean_std field normalisation the
+# GeoTransolver baseline trains on — identical preprocessed surface data for
+# a fair head-to-head.
+
+source: drivaer
+
+# Processed DrivAerML zarr (same paths the GeoTransolver run reads):
+train_path: /code/coreya/datasets/domino/train/
+val_path: /code/coreya/datasets/domino/val/
+
+# Directory holding surface_fields_normalization.npz (the transformer_models
+# 'src' dir). mean/std must be the same file GeoTransolver loads.
+normalization_dir: /code/mnabian/flarejepa/physicsnemo_phase2/examples/cfd/external_aerodynamics/transformer_models/src
+
+# Sampling resolution of the surface cloud. Matches GeoTransolver's REDUCED
+# 100k surface resolution (GTS OOM'd at its 200k default on H100 80GB; the
+# head-to-head is run at 100k on both models for a fair, memory-safe compare).
+resolution: 100_000
+
+# Independent subsets drawn from the sampled cloud:
+#   surface_points        -> geometry (FLARE) encoder input
+#   target_encoder_points -> teacher input (slot-based; can be smaller)
+#   query_points          -> decode + loss resolution (match GeoTransolver 100k)
+surface_points: 100_000
+target_encoder_points: 100_000
+query_points: 100_000
+
+# Conditioning scale for [air_density, stream_velocity] -> gen_params
+# (cond_dim=2). Division only (no mean subtraction) to stay well-defined if a
+# condition is constant across DrivAerML; ~unit scale for the cond MLP.
+cond_scale: [1.2, 40.0]
+
+preload_depth: 1
+
+# Geometry preprocessing — identical to GeoTransolver's surface defaults
+# (transformer_models core.yaml) for a fair head-to-head: centre on the STL
+# CoM and scale by the reference extents so coordinates are ~unit (keeps
+# FlareJEPA's fixed Fourier-octave positional embedding in range).
+translational_invariance: true
+scale_invariance: true
+reference_scale: [12.0, 4.5, 3.25]
+
+# --- keys mirrored from the SuperWing data config for shared-code safety ---
+# (the DrivAer path bypasses _build_loader, but keeping these present avoids
+#  struct-mode surprises if any shared code reads cfg.data.*).
+path: /code/coreya/datasets/domino/
+normalize_xyz: true
+include_normals: true
+include_query_weights: false
+query_weight_alpha: 1.0
+train_deterministic_sampling: false
+eval_deterministic_sampling: true
+eval_full_grid_query: false
+num_workers: 0
+pin_memory: false

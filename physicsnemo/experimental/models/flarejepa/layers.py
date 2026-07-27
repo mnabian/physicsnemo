@@ -33,6 +33,8 @@ Design notes:
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -122,6 +124,7 @@ class _QKNormCrossAttention(nn.Module):
         dim: int,
         heads: int,
         dropout: float = 0.0,
+        key_adaptive_temp: bool = False,
     ) -> None:
         super().__init__()
         if dim % heads != 0:
@@ -133,6 +136,17 @@ class _QKNormCrossAttention(nn.Module):
         self.to_v = nn.Linear(dim, dim)
         self.q_norm = nn.RMSNorm(self.dim_head)
         self.k_norm = nn.RMSNorm(self.dim_head)
+        # Per-KEY adaptive assignment temperature (Transolver++ "eidetic
+        # state" mechanism, arXiv:2502.02414, transplanted to slot pooling):
+        # each TOKEN carries a learned per-head sharpness tau(x_n) dividing
+        # its post-QK-norm key, so tokens on sharp features can assign
+        # themselves peakily to slots while bland tokens spread. Weight is
+        # zero-init and the bias solves softplus(b) = 1, so tau == 1 at
+        # init — the flag only ADDS capacity (exact legacy behaviour).
+        self.to_tau = nn.Linear(dim, heads) if key_adaptive_temp else None
+        if self.to_tau is not None:
+            nn.init.zeros_(self.to_tau.weight)
+            nn.init.constant_(self.to_tau.bias, math.log(math.e - 1.0))
         self.out = nn.Linear(dim, dim)
         self.dropout = nn.Dropout(dropout)
 
@@ -147,6 +161,12 @@ class _QKNormCrossAttention(nn.Module):
     ) -> Float[torch.Tensor, "B Nq C"]:
         qh = self.q_norm(self._split(self.to_q(q)))
         kh = self.k_norm(self._split(self.to_k(kv)))
+        if self.to_tau is not None:
+            # tau: (B, Nkv, H) -> (B, H, Nkv, 1); dividing the key scales
+            # that token's logit COLUMN, i.e. per-token assignment
+            # sharpness. fp32 softplus so bf16 cannot quantise tau near 1.
+            tau = F.softplus(self.to_tau(kv).float()).clamp_min(0.05)
+            kh = kh / tau.permute(0, 2, 1).unsqueeze(-1).to(kh.dtype)
         vh = self._split(self.to_v(kv))
         y = F.scaled_dot_product_attention(qh, kh, vh)
         B, _, Nq, _ = y.shape
@@ -169,11 +189,14 @@ class CrossAttentionPool(nn.Module):
         heads: int,
         mlp_ratio: int = 4,
         dropout: float = 0.0,
+        adaptive_temp: bool = False,
     ) -> None:
         super().__init__()
         self.ln_q = nn.LayerNorm(dim)
         self.ln_kv = nn.LayerNorm(dim)
-        self.attn = _QKNormCrossAttention(dim, heads, dropout)
+        self.attn = _QKNormCrossAttention(
+            dim, heads, dropout, key_adaptive_temp=adaptive_temp
+        )
         self.ln_mlp = nn.LayerNorm(dim)
         self.mlp = Mlp(
             in_features=dim,

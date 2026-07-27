@@ -36,6 +36,9 @@ decoder:
   head_mlp_ratio: 1    # 1 = narrow head; 4 = interior-MLP width
   point_read: false    # dual-read decode — queries also kNN-read the
   point_neighbor_k: 8  #     geometry encoder's pre-pool point tokens
+  # Per-block kNN dilation ladder for the point-read (one int >= 1 per
+  # cross-attention block); null = legacy (all blocks dilation 1).
+  point_dilations: null
   use_cond: true       # false = cond-blind decoder: (aoa,mach) reaches the
                        # field ONLY via the predictor latent (causal probe)
 use_normals: true
@@ -45,3 +48,6 @@ use_sdf: false
 share_slot_queries: false
 mlp_ratio: 4
 dropout: 0.0
+# Per-key adaptive assignment temperature in the Perceiver pools
+# (Transolver++ eidetic state); false = unchanged v1 behaviour.
+pool_adaptive_temp: false

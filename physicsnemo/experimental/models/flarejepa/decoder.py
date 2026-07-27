@@ -27,6 +27,7 @@ from physicsnemo.nn import FourierPositionalEmbedding, Mlp
 
 from physicsnemo.nn.module.point_transformer_attention import (
     LocalTokenCrossAttentionBlock,
+    _dilate_precomputed_idx,
     _dilated_knn,
 )
 
@@ -65,10 +66,25 @@ class Decoder(Module):
         query_chunk_size: int = 4096,
         point_read: bool = False,
         point_neighbor_k: int = 8,
+        point_dilations: tuple[int, ...] | list[int] | None = None,
     ) -> None:
         super().__init__(meta=FlareJEPAMetaData())
         self.query_chunk_size = query_chunk_size
         self.point_read = point_read
+        # Per-block kNN dilation ladder (capacity bundle): block i attends to
+        # every d_i-th of the k*d_i nearest point tokens, so the receptive
+        # field grows with depth at constant neighbour count (WaveNet-style).
+        # None = legacy (all blocks dilation 1).
+        if point_dilations is not None:
+            dil = tuple(int(d) for d in point_dilations)
+            if len(dil) != cross_layers or any(d < 1 for d in dil):
+                raise ValueError(
+                    f"point_dilations must be {cross_layers} ints >= 1, "
+                    f"got {point_dilations}"
+                )
+        else:
+            dil = (1,) * cross_layers
+        self.point_dilations = dil
         self.pe = FourierPositionalEmbedding(
             in_dim=3, num_bands=pe_bands, include_input=True
         )
@@ -139,11 +155,14 @@ class Decoder(Module):
                 torch.promote_types(point_positions.dtype, torch.float32)
             )
             k = int(self.point_blocks[0].neighbor_k)
+            # One search wide enough for the largest dilation; each block
+            # takes its own strided slice below (pure gather, no re-search).
+            k_wide = min(k * max(self.point_dilations), int(p_pos32.shape[1]))
             knn_idx = [
                 _dilated_knn(
                     query_coords=q_pos[b],
                     key_coords=p_pos32[b],
-                    k=min(k, int(p_pos32.shape[1])),
+                    k=k_wide,
                     dilation=1,
                 )
                 for b in range(q_pos.shape[0])
@@ -151,6 +170,15 @@ class Decoder(Module):
         for i, block in enumerate(self.blocks):
             x = block(x, z, cond_embed=cond_embed)
             if self.point_blocks is not None:
+                d_i = self.point_dilations[i]
+                block_idx = (
+                    knn_idx
+                    if d_i == 1
+                    else [
+                        _dilate_precomputed_idx(idx_b, k=k, dilation=d_i)
+                        for idx_b in knn_idx
+                    ]
+                )
                 x = self._point_read(
                     self.point_blocks[i],
                     x,
@@ -158,7 +186,7 @@ class Decoder(Module):
                     point_tokens,
                     point_positions,
                     cond_embed,
-                    knn_idx=knn_idx,
+                    knn_idx=block_idx,
                 )
         return self.head(x)
 

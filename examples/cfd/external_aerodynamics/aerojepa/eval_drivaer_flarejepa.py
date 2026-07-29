@@ -146,13 +146,15 @@ def main() -> None:
     print(
         f"\nPhysicsJEPA DrivAerML validation — {n} cases, "
         f"{'EMA' if used_ema else 'live'} weights, un-normalised "
-        f"(GeoTransolver-comparable):\n"
+        f"(GeoTransolver-comparable, exact metrics_fn_surface keys):\n"
         f"  rel-L2   pressure={avg['l2_pressure_surf']:.4f}  "
-        f"tau_x={avg['l2_shear_x']:.4f}  tau_y={avg['l2_shear_y']:.4f}  "
-        f"tau_z={avg['l2_shear_z']:.4f}\n"
+        f"WSS={avg['l2_wall_shear_stress']:.4f}  "
+        f"(tau_x={avg['l2_shear_x']:.4f} tau_y={avg['l2_shear_y']:.4f} "
+        f"tau_z={avg['l2_shear_z']:.4f})\n"
         f"  rel-L1   pressure={avg['l1_pressure_surf']:.4f}  "
-        f"tau_x={avg['l1_shear_x']:.4f}  tau_y={avg['l1_shear_y']:.4f}  "
-        f"tau_z={avg['l1_shear_z']:.4f}\n"
+        f"WSS={avg['l1_wall_shear_stress']:.4f}  "
+        f"(tau_x={avg['l1_shear_x']:.4f} tau_y={avg['l1_shear_y']:.4f} "
+        f"tau_z={avg['l1_shear_z']:.4f})\n"
     )
 
 

@@ -501,37 +501,46 @@ def _compute_term_weights(epoch: int, loss_cfg: DictConfig) -> dict[str, float]:
 # --------------------------------------------------------------------------- #
 
 
+# EXACT replica of GeoTransolver's metrics.py::metrics_fn_surface (its l2/l1
+# keys): per-channel rel-L2/L1 for pressure + 3 wall-shear components, PLUS
+# wall-shear-stress MAGNITUDE — so the two models' validation numbers match
+# key-for-key. NOTE (matches GTS): the wall-shear-magnitude l2/l1 sum GLOBALLY
+# over (B, N) into a single scalar, whereas the per-channel l2/l1 are per-sample
+# then meaned. No denominator clamp — replicated verbatim from GTS.
 _SURFACE_FIELD_METRIC_KEYS = (
     "l2_pressure_surf", "l2_shear_x", "l2_shear_y", "l2_shear_z",
+    "l2_wall_shear_stress",
     "l1_pressure_surf", "l1_shear_x", "l1_shear_y", "l1_shear_z",
+    "l1_wall_shear_stress",
 )
 
 
 def _surface_field_metrics(
     pred: torch.Tensor, target: torch.Tensor
 ) -> dict[str, torch.Tensor]:
-    """Per-channel relative L2/L1 on un-normalised ``(B, N, 4)`` surface fields.
-
-    Mirrors ``transformer_models/src/metrics.py::metrics_fn_surface``: the L2
-    reduction is ``sqrt(sum_N (pred-target)^2) / sqrt(sum_N target^2)`` per
-    channel, meaned over the batch (the cross-rank mean-of-means is handled by
-    the same SUM/n reduction as every other metric in ``_run_epoch``).
-    """
+    """Exact replica of ``transformer_models/src/metrics.py::metrics_fn_surface``
+    (its l2/l1 keys), on un-normalised ``(B, N, 4)`` surface fields."""
+    ws_pred = torch.sqrt((pred[:, :, 1:4] ** 2).sum(dim=2))     # (B, N)
+    ws_tgt = torch.sqrt((target[:, :, 1:4] ** 2).sum(dim=2))
     l2 = torch.sqrt(((pred - target) ** 2).sum(dim=1)) / torch.sqrt(
         (target ** 2).sum(dim=1)
-    ).clamp_min(1e-12)
-    l1 = torch.abs(pred - target).sum(dim=1) / torch.abs(target).sum(
-        dim=1
-    ).clamp_min(1e-12)
+    )
+    l1 = torch.abs(pred - target).sum(dim=1) / torch.abs(target).sum(dim=1)
+    l2_ws = torch.sqrt(((ws_pred - ws_tgt) ** 2).sum()) / torch.sqrt(
+        (ws_tgt ** 2).sum()
+    )
+    l1_ws = torch.abs(ws_pred - ws_tgt).sum() / torch.abs(ws_tgt).sum()
     return {
         "l2_pressure_surf": l2[:, 0].mean(),
         "l2_shear_x": l2[:, 1].mean(),
         "l2_shear_y": l2[:, 2].mean(),
         "l2_shear_z": l2[:, 3].mean(),
+        "l2_wall_shear_stress": l2_ws,
         "l1_pressure_surf": l1[:, 0].mean(),
         "l1_shear_x": l1[:, 1].mean(),
         "l1_shear_y": l1[:, 2].mean(),
         "l1_shear_z": l1[:, 3].mean(),
+        "l1_wall_shear_stress": l1_ws,
     }
 
 
@@ -1132,15 +1141,17 @@ def main(cfg: DictConfig) -> None:
                 # (un-normalised rel-L2/L1), same channels/formula as GTS's
                 # "Validation Average Metrics" table.
                 log.info(
-                    "epoch=%03d val rel-L2  p=%.4f  tau_x=%.4f  tau_y=%.4f  "
-                    "tau_z=%.4f  | rel-L1  p=%.4f  tau_x=%.4f  tau_y=%.4f  "
-                    "tau_z=%.4f",
+                    "epoch=%03d val rel-L2  p=%.4f  WSS=%.4f  "
+                    "(tau_x=%.4f tau_y=%.4f tau_z=%.4f)  | rel-L1  p=%.4f  "
+                    "WSS=%.4f  (tau_x=%.4f tau_y=%.4f tau_z=%.4f)",
                     epoch,
                     val_metrics["l2_pressure_surf"],
+                    val_metrics["l2_wall_shear_stress"],
                     val_metrics["l2_shear_x"],
                     val_metrics["l2_shear_y"],
                     val_metrics["l2_shear_z"],
                     val_metrics["l1_pressure_surf"],
+                    val_metrics["l1_wall_shear_stress"],
                     val_metrics["l1_shear_x"],
                     val_metrics["l1_shear_y"],
                     val_metrics["l1_shear_z"],

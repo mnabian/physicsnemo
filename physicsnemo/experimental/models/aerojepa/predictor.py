@@ -99,8 +99,8 @@ class PrototypeTokenJEPAHead(Module):
         Hidden multiplier inside each block's ``AdaLNResidualMLP``. Default 4.
     dropout : float, optional
         Dropout used throughout. Default 0.0.
-    use_te : bool, optional
-        Use Transformer Engine layers. Default ``False``.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
     """
 
     def __init__(

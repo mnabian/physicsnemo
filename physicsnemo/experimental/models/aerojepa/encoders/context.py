@@ -98,8 +98,8 @@ class ContextTransformer(BaseContextEncoder):
         Append the three solid-normal channels. Default ``False``.
     use_solid_n_dot_uinf : bool, optional
         Append the solid-normal · u-inf channel. Default ``False``.
-    use_te : bool, optional
-        Use Transformer Engine layers. Default ``False``.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
     """
 
     supports_batched_forward = True

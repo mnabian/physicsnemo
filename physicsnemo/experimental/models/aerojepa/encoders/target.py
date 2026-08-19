@@ -90,8 +90,8 @@ class TargetTransformer(BaseTargetEncoder):
         Hidden dim for the graph pool.
     tokenizer_graph_pool_layers : int, optional
         Message-passing layers in the graph pool. Default 2.
-    use_te : bool, optional
-        Use Transformer Engine layers. Default ``False``.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
     """
 
     supports_batched_forward = True

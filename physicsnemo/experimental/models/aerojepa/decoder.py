@@ -205,8 +205,8 @@ class QueryTokenDecoder(Module):
         features. Default ``False``.
     extra_sdf_inv_eps : float, optional
         Epsilon for the ``1/(|sdf|+eps)`` channel. Default ``1e-3``.
-    use_te : bool, optional
-        Use Transformer Engine layers. Default ``False``.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
 
     Raises
     ------

@@ -190,6 +190,8 @@ class PointClusterGraphPool(nn.Module):
         Number of message-passing iterations. Clamped to at least 1.
     dropout : float
         Dropout used inside the message and update MLPs.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
 
     Shape
     -----
@@ -381,6 +383,8 @@ class PointTransformer(Module):
     gen_conditioning_dim : int or None
         Dimension of the conditioning vector; required when
         ``use_gen_conditioning=True``.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
 
     Raises
     ------

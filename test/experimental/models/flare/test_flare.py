@@ -20,7 +20,8 @@ import pytest
 import torch
 
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.flare import FLARE
+from physicsnemo.experimental.models.flare import FLARE, FLAREPlusPlus
+from physicsnemo.experimental.nn import FLAREPlusPlus as FLAREPlusPlusAttention
 from test.common import (
     check_ort_version,
     validate_amp,
@@ -81,6 +82,96 @@ def test_flare_constructor(config):
     assert hasattr(model, "preprocess"), "Model should have preprocess MLP"
     assert hasattr(model, "blocks"), "Model should have transformer blocks"
     assert hasattr(model, "meta"), "Model should have metadata"
+
+
+def test_flare_plus_plus_constructor():
+    """Test FLARE++ model construction and attention block selection."""
+    config = dict(
+        functional_dim=2,
+        out_dim=3,
+        embedding_dim=3,
+        n_layers=3,
+        n_hidden=32,
+        n_head=4,
+        slice_num=6,
+    )
+    model = FLAREPlusPlus(**config)
+    fixed_query_model = FLARE(**config)
+
+    assert isinstance(model, Module)
+    assert len(model.blocks) == 3
+    assert all(isinstance(block.Attn, FLAREPlusPlusAttention) for block in model.blocks)
+    assert all(block.Attn.q_seed.shape == (1, 4, 6, 8) for block in model.blocks)
+    n_parameters = sum(parameter.numel() for parameter in model.parameters())
+    n_fixed_parameters = sum(
+        parameter.numel() for parameter in fixed_query_model.parameters()
+    )
+    assert n_parameters - n_fixed_parameters == 3 * 2 * (32 * 32 + 32)
+
+    incompatible_keys = model.load_state_dict(
+        fixed_query_model.state_dict(), strict=False
+    )
+    assert incompatible_keys.unexpected_keys == []
+    assert set(incompatible_keys.missing_keys) == {
+        f"blocks.{block}.Attn.query_synthesis_{projection}.{parameter}"
+        for block in range(3)
+        for projection in ("k", "v")
+        for parameter in ("bias", "weight")
+    }
+
+
+def test_flare_plus_plus_irregular_forward_and_backward(device):
+    """Test end-to-end FLARE++ on a small irregular point cloud."""
+    torch.manual_seed(0)
+    model = FLAREPlusPlus(
+        functional_dim=2,
+        out_dim=1,
+        embedding_dim=3,
+        n_layers=2,
+        n_hidden=32,
+        n_head=4,
+        mlp_ratio=1,
+        slice_num=8,
+        unified_pos=False,
+        structured_shape=None,
+    ).to(device)
+    embedding = torch.randn(2, 31, 3, device=device)
+    functional_input = torch.randn(2, 31, 2, device=device, requires_grad=True)
+
+    output = model(functional_input, embedding)
+    output.square().mean().backward()
+
+    assert output.shape == (2, 31, 1)
+    assert torch.isfinite(output).all()
+    assert functional_input.grad is not None
+    assert torch.isfinite(functional_input.grad).all()
+
+
+def test_flare_plus_plus_checkpoint(device):
+    """Test FLARE++ save, load, and construction from a checkpoint."""
+
+    def make_model():
+        return FLAREPlusPlus(
+            functional_dim=2,
+            out_dim=1,
+            embedding_dim=3,
+            n_layers=2,
+            n_hidden=32,
+            n_head=4,
+            mlp_ratio=1,
+            slice_num=8,
+        ).to(device)
+
+    model_1 = make_model()
+    model_2 = make_model()
+    functional_input = torch.randn(1, 17, 2, device=device)
+    embedding = torch.randn(1, 17, 3, device=device)
+
+    assert validate_checkpoint(
+        model_1,
+        model_2,
+        (functional_input, embedding),
+    )
 
 
 def test_flare_2d_forward(device):
@@ -154,13 +245,14 @@ def test_flare_irregular_forward(device):
     )
 
 
-def test_flare_optims(device):
-    """Test FLARE optimizations"""
+@pytest.mark.parametrize("model_cls", [FLARE, FLAREPlusPlus])
+def test_flare_optims(device, model_cls):
+    """Test FLARE-family optimizations, including mixed precision."""
 
     def setup_model():
         """Set up fresh FLARE model and inputs for each optim test"""
 
-        model = FLARE(
+        model = model_cls(
             structured_shape=None,
             n_layers=8,
             n_hidden=64,
@@ -280,9 +372,10 @@ def test_flare_checkpoint(device):
 
 
 @check_ort_version()
-def test_flare_deploy(device):
-    """Test FLARE deployment support"""
-    model = FLARE(
+@pytest.mark.parametrize("model_cls", [FLARE, FLAREPlusPlus])
+def test_flare_deploy(device, model_cls):
+    """Test FLARE-family deployment support."""
+    model = model_cls(
         structured_shape=(85, 85),
         n_layers=8,
         n_hidden=64,

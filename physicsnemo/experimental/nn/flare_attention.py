@@ -14,13 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""FLARE (Fast Low-rank Attention Routing Engine) attention layer.
+"""FLARE low-rank attention layers.
 
-This module provides the FLARE attention mechanism,
-an alternative to the PhysicsAttention attention mechanism of the Transolver.
+This module provides the fixed-query FLARE attention mechanism and the
+input-conditioned FLARE++ variant. Both are alternatives to the
+PhysicsAttention mechanism used by Transolver.
 """
 
 from __future__ import annotations
+
+import math
 
 import torch
 import torch.nn as nn
@@ -28,7 +31,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from jaxtyping import Float
 
-from physicsnemo.core.version_check import check_version_spec, OptionalImport
+from physicsnemo.core.version_check import OptionalImport, check_version_spec
 from physicsnemo.nn.module.physics_attention import _project_input
 
 # Check optional dependency availability
@@ -73,6 +76,55 @@ def _flare_self_attention(
     return F.scaled_dot_product_attention(k, G, z, scale=scale)
 
 
+def _flare_plus_plus_self_attention(
+    x_mid: Float[torch.Tensor, "B H N D"],
+    q_seed: nn.Parameter,
+    query_k: Float[torch.Tensor, "B H N D"],
+    query_v: Float[torch.Tensor, "B H N D"],
+    self_k: nn.Module,
+    self_v: nn.Module,
+    scale: float,
+) -> Float[torch.Tensor, "B H N D"]:
+    r"""FLARE++ three-pass self-attention kernel.
+
+    The first attention pass uses learned latent seeds to synthesize routing
+    queries from the current input. The next two passes apply the same
+    gather-scatter factorization as FLARE using those input-conditioned
+    queries. Consequently, the effective token-to-token attention matrix has
+    rank at most the number of latent seeds for each input.
+
+    Parameters
+    ----------
+    x_mid : torch.Tensor
+        Projected input of shape :math:`(B, H, N, D)`.
+    q_seed : nn.Parameter
+        Learned latent seeds of shape :math:`(1, H, S, D)`.
+    query_k : torch.Tensor
+        Keys used to synthesize routing queries, with shape
+        :math:`(B, H, N, D)`.
+    query_v : torch.Tensor
+        Values used to synthesize routing queries, with shape
+        :math:`(B, H, N, D)`.
+    self_k : nn.Module
+        Key projection used by the gather-scatter FLARE operator.
+    self_v : nn.Module
+        Value projection used by the gather-scatter FLARE operator.
+    scale : float
+        Attention scale factor.
+
+    Returns
+    -------
+    torch.Tensor
+        Self-attended output of shape :math:`(B, H, N, D)`.
+    """
+    seeds = q_seed.to(dtype=x_mid.dtype).expand(x_mid.shape[0], -1, -1, -1)
+    queries = F.scaled_dot_product_attention(seeds, query_k, query_v, scale=scale)
+    k = self_k(x_mid)
+    v = self_v(x_mid)
+    z = F.scaled_dot_product_attention(queries, k, v, scale=scale)
+    return F.scaled_dot_product_attention(k, queries, z, scale=scale)
+
+
 class FLARE(nn.Module):
     r"""FLARE: Fast Low-rank Attention Routing Engine attention layer.
     Adopted:
@@ -93,6 +145,9 @@ class FLARE(nn.Module):
         Number of learned global queries. Default is 64.
     use_te : bool, optional
         Whether to use Transformer Engine backend when available. Default is False.
+    attn_scale : float, optional
+        Multiplicative scale applied to attention logits. The default ``1.0``
+        preserves the original FLARE implementation and checkpoint behavior.
 
     Forward
     -------
@@ -119,6 +174,7 @@ class FLARE(nn.Module):
         dropout: float = 0.0,
         n_global_queries: int = 64,
         use_te: bool = True,
+        attn_scale: float = 1.0,
     ):
         if use_te:
             raise ValueError(
@@ -129,9 +185,11 @@ class FLARE(nn.Module):
         self.use_te = use_te
         self.heads = heads
         self.dim_head = dim_head
-        self.scale = 1.0
-        # It is recommended by the FLARE authors to use self.scale = 1 if self.dim_head <= 8 else (self.dim_head ** -0.5)
-        # but we use self.scale = 1.0 because the recommended scaling is not tested yet.
+        if not math.isfinite(attn_scale) or attn_scale <= 0.0:
+            raise ValueError(
+                f"attn_scale must be a finite value greater than 0, got {attn_scale}"
+            )
+        self.scale = float(attn_scale)
         inner_dim = dim_head * heads
 
         linear_layer = te.Linear if self.use_te else nn.Linear
@@ -151,7 +209,7 @@ class FLARE(nn.Module):
                 kv_channels=self.dim_head,
                 attention_dropout=dropout,
                 qkv_format="bshd",
-                softmax_scale=self.scale
+                softmax_scale=self.scale,
             )
 
         # Linear projection for output
@@ -176,16 +234,178 @@ class FLARE(nn.Module):
         """
 
         x_mid = _project_input(
-            x, self.in_project_x, self.heads, self.dim_head,
+            x,
+            self.in_project_x,
+            self.heads,
+            self.dim_head,
             "B N (H D) -> B N H D",
         )
         x_mid = x_mid.permute(0, 2, 1, 3)  # (B, N, H, D) -> (B, H, N, D)
 
         y = _flare_self_attention(
-            x_mid, self.q_global, self.self_k, self.self_v, self.scale,
+            x_mid,
+            self.q_global,
+            self.self_k,
+            self.self_v,
+            self.scale,
         )
 
         out_x = y.permute(0, 2, 1, 3)  # (B, H, N, D) -> (B, N, H, D)
         out_x = rearrange(out_x, "b n h d -> b n (h d)")
+        out_x = self.out_linear(out_x)
+        return self.out_dropout(out_x)
+
+
+class FLAREPlusPlus(FLARE):
+    r"""FLARE++ attention with input-conditioned dynamic routing queries.
+
+    FLARE++ replaces FLARE's fixed routing queries with queries synthesized
+    from the current input. Learned latent seeds first attend to separate key
+    and value projections of the input; the resulting queries then drive the
+    standard FLARE gather-scatter attention. The complete mixer therefore uses
+    three scaled dot-product attention calls and retains :math:`O(NS)` time
+    complexity for :math:`N` input tokens and :math:`S` latent routes.
+
+    For architecture details, see:
+
+    - `FLARE++: Low-rank attention with dynamic attention routing
+      <https://arxiv.org/abs/2608.11519>`_
+
+    Parameters
+    ----------
+    dim : int
+        Input dimension of the features.
+    heads : int, optional
+        Number of attention heads. Default is 8.
+    dim_head : int, optional
+        Dimension of each attention head. Default is 64.
+    dropout : float, optional
+        Dropout rate applied to the output. Default is 0.0.
+    n_global_queries : int, optional
+        Number of learned latent seeds and dynamic routing queries. Default is
+        64.
+    use_te : bool, optional
+        Whether to use Transformer Engine. FLARE++ does not support this
+        backend. Default is ``False``.
+    attn_scale : float | None, optional
+        Multiplicative scale applied to attention logits. ``None`` uses
+        standard scaled dot-product attention, ``dim_head ** -0.5``, as in
+        the FLARE++ paper. Pass ``1.0`` to match historical FLARE scaling.
+
+    Forward
+    -------
+    x : torch.Tensor[Batch, N_points, N_Channels] ([B, N, C])
+
+    Outputs
+    -------
+    torch.Tensor[Batch, N_points, N_Channels] ([B, N, C])
+
+    Examples
+    --------
+    >>> import torch
+    >>> flare_pp = FLAREPlusPlus(dim=256, heads=8, dim_head=32)
+    >>> x = torch.randn(2, 100, 256)
+    >>> outputs = flare_pp(x)
+    >>> outputs.shape
+    torch.Size([2, 100, 256])
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        heads: int = 8,
+        dim_head: int = 64,
+        dropout: float = 0.0,
+        n_global_queries: int = 64,
+        use_te: bool = False,
+        attn_scale: float | None = None,
+    ) -> None:
+        if attn_scale is None:
+            attn_scale = dim_head**-0.5
+        super().__init__(
+            dim=dim,
+            heads=heads,
+            dim_head=dim_head,
+            dropout=dropout,
+            n_global_queries=n_global_queries,
+            use_te=use_te,
+            attn_scale=attn_scale,
+        )
+        inner_dim = dim_head * heads
+
+        # Separate full-width projections implement K_e and V_e in equation
+        # (7) of the FLARE++ paper. ``q_global`` inherited from FLARE acts as
+        # the learned latent seed Q_e rather than as the final routing query.
+        self.query_synthesis_k = nn.Linear(dim, inner_dim)
+        self.query_synthesis_v = nn.Linear(dim, inner_dim)
+
+    @property
+    def q_seed(self) -> nn.Parameter:
+        r"""Learned seeds used to synthesize the dynamic routing queries.
+
+        The underlying parameter retains FLARE's ``q_global`` state-dict name,
+        which allows fixed-query FLARE weights to warm-start FLARE++ with
+        ``strict=False``.
+        """
+        return self.q_global
+
+    def forward(self, x: Float[torch.Tensor, "B N C"]) -> Float[torch.Tensor, "B N C"]:
+        r"""Apply FLARE++ dynamic routing to input features.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor of shape :math:`(B, N, C)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape :math:`(B, N, C)`.
+        """
+        # FLARE++ context parallelism requires two globally normalized
+        # distributed encoders (paper Appendix A). A local SDPA over each
+        # token shard is not equivalent, so reject ShardTensor explicitly
+        # until that collective-aware kernel is available.
+        from physicsnemo.domain_parallel import ShardTensor
+
+        if isinstance(x, ShardTensor):
+            raise NotImplementedError(
+                "FLAREPlusPlus does not yet support token-sharded ShardTensor "
+                "inputs; use replicated inputs with data parallelism."
+            )
+
+        x_mid = _project_input(
+            x,
+            self.in_project_x,
+            self.heads,
+            self.dim_head,
+            "B N (H D) -> B N H D",
+        ).permute(0, 2, 1, 3)
+        query_k = _project_input(
+            x,
+            self.query_synthesis_k,
+            self.heads,
+            self.dim_head,
+            "B N (H D) -> B N H D",
+        ).permute(0, 2, 1, 3)
+        query_v = _project_input(
+            x,
+            self.query_synthesis_v,
+            self.heads,
+            self.dim_head,
+            "B N (H D) -> B N H D",
+        ).permute(0, 2, 1, 3)
+
+        y = _flare_plus_plus_self_attention(
+            x_mid,
+            self.q_seed,
+            query_k,
+            query_v,
+            self.self_k,
+            self.self_v,
+            self.scale,
+        )
+
+        out_x = rearrange(y.permute(0, 2, 1, 3), "b n h d -> b n (h d)")
         out_x = self.out_linear(out_x)
         return self.out_dropout(out_x)

@@ -17,6 +17,17 @@ GeoTransolver adapts the Transolver backbone by replacing standard attention wit
 
 GALE directly targets core challenges in AI physics modeling. By structuring self-attention around physics-aware slices, GeoTransolver encourages interactions that reflect operator couplings (e.g., pressure–velocity or field–material). Multi-scale ball queries enforce locality where needed while maintaining access to global signals, balancing efficiency with nonlocal reasoning. Continuous geometry-context projection at depth mitigates representation drift and improves stability, while providing a natural interface for constraint-aware training and regularization. Together, these design choices enhance accuracy, robustness to geometric and regime shifts, and scalability on large, irregular discretizations.
 
+GeoTransolver exposes three self-attention backends through
+`model.attention_type`: `GALE`, `GALE_FA` (fixed-query FLARE), and `GALE_FPP`
+(input-conditioned FLARE++). The FLARE-family backends retain GeoTransolver's
+geometry/global cross-attention while replacing its self-attention token mixer.
+Use `model.use_te=false` with `GALE_FA` or `GALE_FPP`; FLARE++ uses standard
+scaled dot-product scaling by default and remains linear in the number of input
+points for a fixed number of routes.
+
+For example, select the FLARE++ backend with
+`model.attention_type=GALE_FPP model.use_te=false` in the Hydra overrides.
+
 ## External Aerodynamics CFD Example: Overview
 
 This directory contains the essential components for training and evaluating models tailored to external aerodynamics CFD problems. The training examples use the [DrivaerML dataset](https://caemldatasets.org/drivaerml/).

@@ -14,12 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""FLARE Transolver: Transolver with FLARE attention.
+r"""FLARE-family Transolver models.
 
-This module provides FLARE, a Transolver variant that uses
-FLARE (Fast Low-rank Attention Routing Engine) attention.
+This module provides Transolver variants using FLARE and FLARE++ attention.
 """
 
-from .flare import FLARE
+from .flare import FLARE, FLAREPlusPlus
 
-__all__ = ["FLARE"]
+__all__ = ["FLARE", "FLAREPlusPlus"]

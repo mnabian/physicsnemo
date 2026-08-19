@@ -444,6 +444,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point, cell, and global data as well as geometry. The matching new
   `to_pyvista(..., force_copy=True)` option prevents exported PyVista geometry
   and data from mutating the source `Mesh` through shared CPU storage.
+- `physicsnemo.mesh.io.from_pyvista` now supports native line/poly-line grids,
+  pixels, triangle strips, and pentagonal/hexagonal prisms, and selects explicit
+  dimensions from mixed `UnstructuredGrid` inputs while preserving selected
+  parent data. Explicit 1D conversion still derives the unique edge graph when
+  no native lines exist. Connectivity and attached-data invariants are validated
+  before VTK filters run. Unsupported higher-order topology is rejected pending
+  globally conforming tessellation, while explicit vertex point-cloud conversion
+  remains available without interpreting that topology. Centroid conversion
+  rejects parents that cannot preserve cell-data alignment.
 - `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
   boolean fields by returning `float64`, so NaN sentinels and non-integral
   interpolation or multi-cell means are representable (subject to the usual
@@ -776,6 +785,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.nn.init.trunc_normal_` that emits a `DeprecationWarning` on
   call, replacing the frozen in-tree copy of the legacy inverse-CDF
   implementation. Use `torch.nn.init.trunc_normal_` directly.
+- Deprecates the CorrDiff example (`examples/weather/corrdiff`), which no longer
+  receives maintenance, bug fixes, or new features. Use the regional
+  high-resolution weather model example (`examples/weather/stormcast`) instead.
+  That example unifies regional diffusion-based weather models, and covers the
+  CorrDiff downscaling setting alongside other diffusion-based settings.
 
 ### Removed
 

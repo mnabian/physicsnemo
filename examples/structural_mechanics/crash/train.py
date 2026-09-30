@@ -295,7 +295,9 @@ class Trainer:
                 val_cfg.num_samples = self.num_validation_samples
 
         def build_datasets(stats_mode):
-            training = instantiate(cfg.datapipe, **dataset_kwargs, stats_mode=stats_mode)
+            training = instantiate(
+                cfg.datapipe, **dataset_kwargs, stats_mode=stats_mode
+            )
             validation = None
             if val_cfg is not None:
                 validation = instantiate(
@@ -313,9 +315,13 @@ class Trainer:
         # while another is still building static masks on the CPU.
         dataset, val_dataset = initialize_datasets(
             build_datasets,
-            timeout_seconds=float(cfg.training.get("data_startup_timeout_seconds", 3600)),
+            timeout_seconds=float(
+                cfg.training.get("data_startup_timeout_seconds", 3600)
+            ),
         )
-        logger0.info("CPU dataset startup complete on all ranks; GPU training may start")
+        logger0.info(
+            "CPU dataset startup complete on all ranks; GPU training may start"
+        )
         sample_target = dataset[0].node_target
         self.target_channels = int(sample_target.shape[-1])
         logging.getLogger().setLevel(logging.INFO)

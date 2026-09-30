@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Bumper-beam full-trajectory one-shot experiment using MeshTransolver.
+
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: ./outputs/
+
+experiment_name: "Bumper-MeshTransolver-OneShot"
+
+defaults:
+  - reader: vtp
+  - datapipe: graph
+  - model: meshtransolver_one_shot
+  - training: default
+  - inference: default
+  - _self_
+
+training:
+  raw_data_dir: ???
+  raw_data_dir_validation: ???
+  global_features_filepath: ???
+  optimizer: adamw
+  amp_dtype: bfloat16
+  num_time_steps: 51
+  num_training_samples: 129
+  num_validation_samples: 5
+  validation_freq: 1
+  early_stopping_patience: 20
+
+inference:
+  raw_data_dir_test: ???
+
+datapipe:
+  static_features: []
+  dynamic_targets:
+    - effective_plastic_strain
+    - stress_vm
+  global_features:
+    - velocity_x
+    - thickness_scale
+    - rwall_origin_y
+  sample_type: all_time_steps

@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+defaults:
+  - gm_crash_deformer_contact_checkpointed_autoregressive_tbptt
+  - _self_
+
+experiment_name: GM-Crash-DeFormer-FLARE-AR-TBPTT-ContactOffloaded
+
+# Optional host-memory tradeoff, still the same network and TBPTT window.
+model:
+  checkpoint_offloading: true

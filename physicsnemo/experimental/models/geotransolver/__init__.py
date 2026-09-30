@@ -29,8 +29,10 @@ GALE
     Geometry-Aware Latent Embeddings attention layer.
 GALE_FA
     GALE with FLARE self-attention backend.
+GALE_FPP
+    GALE with FLARE++ input-conditioned routing backend.
 GALE_block
-    Transformer block using GALE or GALE_FA attention.
+    Transformer block using a GALE-family attention backend.
 GALEStructuredMesh2D
     GALE with Conv2d slice projection for 2D structured grids.
 GALEStructuredMesh3D
@@ -73,10 +75,11 @@ torch.Size([2, 1000, 3])
 """
 
 from physicsnemo.nn import (
-      ConcreteDropout,
-      collect_concrete_dropout_losses,
-      get_concrete_dropout_rates,
+    ConcreteDropout,
+    collect_concrete_dropout_losses,
+    get_concrete_dropout_rates,
 )
+
 from .context_projector import (
     ContextProjector,
     GeometricFeatureProcessor,
@@ -87,6 +90,7 @@ from .context_projector import (
 from .gale import (
     GALE,
     GALE_FA,
+    GALE_FPP,
     GALE_block,
     GALEStructuredMesh2D,
     GALEStructuredMesh3D,
@@ -98,6 +102,7 @@ __all__ = [
     "GeoTransolverMetaData",
     "GALE",
     "GALE_FA",
+    "GALE_FPP",
     "GALE_block",
     "GALEStructuredMesh2D",
     "GALEStructuredMesh3D",

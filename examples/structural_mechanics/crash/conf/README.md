@@ -8,6 +8,8 @@
 ```bash
 python train.py --config-name=bumper_geotransolver_oneshot
 python train.py --config-name=crash_geotransolver_oneshot
+python train.py --config-name=bumper_geoflare_flare_autoregressive
+python train.py --config-name=bumper_meshgeoflare_adapter_flare_autoregressive
 python inference.py --config-name=crash_geotransolver_oneshot
 ```
 

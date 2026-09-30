@@ -142,7 +142,7 @@ def _normalize_tensor(
         return (x,)
     if isinstance(x, Sequence):
         return tuple(x)
-    raise TypeError(f"Invalid tensor structure")
+    raise TypeError("Invalid tensor structure")
 
 
 def _structured_num_tokens(spatial_shape: tuple[int, ...]) -> int:
@@ -265,13 +265,20 @@ class GeoTransolver(Module):
         training, and emits warnings on out-of-distribution inputs during
         inference. Default is ``None``.
     attention_type : str, optional
-        attention_type is used to choose the attention type (GALE or GALE_FA). 
-        Default is ``"GALE"``.
+        Attention backend. ``"GALE"`` uses physics-aware slices,
+        ``"GALE_FA"`` uses fixed-query FLARE, and ``"GALE_FPP"`` uses
+        input-conditioned FLARE++ routing. Default is ``"GALE"``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs in GALE layers.
         ``"weighted"`` uses a learnable sigmoid-gated weighted sum.
         ``"concat_project"`` concatenates the two along the head dimension and
         projects back with a linear layer. Default is ``"weighted"``.
+    attn_scale : float | None, optional
+        Attention-logit scale for FLARE-family backends. ``None`` selects the
+        backend default: ``1.0`` for ``"GALE_FA"`` and
+        the inverse square root of the effective per-head dimension for
+        ``"GALE_FPP"``. It must remain ``None`` for ``"GALE"``. Default is
+        ``None``.
 
     Forward
     -------
@@ -303,7 +310,7 @@ class GeoTransolver(Module):
         layout—flattened :math:`(B, N, C_{out})` or spatial
         :math:`(B, H, W, C_{out})` / :math:`(B, H, W, D, C_{out})` when
         inputs were 4D/5D.
-        
+
         When ``return_embedding_states=True``, returns a 2-tuple
         ``(output, embedding_states)`` where ``output`` follows the same
         rules above, and ``embedding_states`` is of shape
@@ -334,6 +341,7 @@ class GeoTransolver(Module):
     See Also
     --------
     :class:`~physicsnemo.experimental.models.geotransolver.gale.GALE` : The attention mechanism used in GeoTransolver.
+    :class:`~physicsnemo.experimental.models.geotransolver.gale.GALE_FPP` : GeoTransolver backend with FLARE++ dynamic routing.
     :class:`~physicsnemo.experimental.models.geotransolver.gale.GALE_block` : Transformer block using GALE attention.
     :class:`~physicsnemo.experimental.models.geotransolver.context_projector.ContextProjector` : Projects context features onto physical states.
 
@@ -425,6 +433,7 @@ class GeoTransolver(Module):
         attention_type: str = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
+        attn_scale: float | None = None,
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
@@ -434,6 +443,23 @@ class GeoTransolver(Module):
             radii = [0.05, 0.25]
         if neighbors_in_radius is None:
             neighbors_in_radius = [8, 32]
+
+        valid_attention_types = {"GALE", "GALE_FA", "GALE_FPP"}
+        if attention_type not in valid_attention_types:
+            choices = ", ".join(sorted(valid_attention_types))
+            raise ValueError(
+                f"Invalid attention_type {attention_type!r}; expected one of: {choices}"
+            )
+        if use_te and attention_type in {"GALE_FA", "GALE_FPP"}:
+            raise ValueError(
+                f"{attention_type} does not support Transformer Engine; "
+                "set use_te=False"
+            )
+        if attention_type == "GALE" and attn_scale is not None:
+            raise ValueError(
+                "attn_scale is only supported by the GALE_FA and GALE_FPP "
+                "attention backends"
+            )
 
         if structured_shape is not None:
             if include_local_features:
@@ -446,7 +472,9 @@ class GeoTransolver(Module):
                     f"structured_shape must have length 2 or 3, got {structured_shape!r}"
                 )
             if not all(int(s) > 0 for s in structured_shape):
-                raise ValueError(f"structured_shape must be positive ints, got {structured_shape!r}")
+                raise ValueError(
+                    f"structured_shape must be positive ints, got {structured_shape!r}"
+                )
 
         self.include_local_features = include_local_features
         self.use_te = use_te
@@ -534,6 +562,7 @@ class GeoTransolver(Module):
                     attention_type=attention_type,
                     concrete_dropout=concrete_dropout,
                     state_mixing_mode=state_mixing_mode,
+                    attn_scale=attn_scale,
                 )
                 for layer_idx in range(n_layers)
             ]
@@ -596,6 +625,49 @@ class GeoTransolver(Module):
                 sensitivity=cfg.sensitivity,
             )
 
+    def _apply_ood_guard(
+        self,
+        global_embedding: torch.Tensor | None,
+        geometry_context: torch.Tensor | None,
+    ) -> None:
+        """Collect or check the context used by the embedded OOD guard."""
+
+        if self.ood_guard is None:
+            return
+        # Pool (B, H, S, D) -> (B, D); the guard expects pre-pooled latents.
+        geometry_latent = (
+            geometry_context.mean(dim=(1, 2)) if geometry_context is not None else None
+        )
+        if self.training:
+            self.ood_guard.collect(global_embedding, geometry_latent)
+        else:
+            self.ood_guard.check(global_embedding, geometry_latent)
+
+    def _process_preprocessed_embeddings(
+        self,
+        embeddings: list[torch.Tensor],
+        context: torch.Tensor | None,
+        local_features: list[torch.Tensor] | None,
+    ) -> list[torch.Tensor]:
+        """Run local-feature concatenation, GALE blocks, and output heads.
+
+        This protected seam lets hybrid models insert mesh processing after the
+        native GeoTransolver input projection without decoding back to the raw
+        functional feature dimension. ``embeddings`` must contain one
+        ``[B, N, n_hidden]`` tensor per configured input stream.
+        """
+
+        if self.include_local_features and local_features is not None:
+            embeddings = [
+                torch.cat([embeddings[i], local_features[i]], dim=-1)
+                for i in range(len(embeddings))
+            ]
+
+        for block in self.blocks:
+            embeddings = block(tuple(embeddings), context)
+
+        return [self.ln_mlp_out[i](embeddings[i]) for i in range(len(embeddings))]
+
     def forward(
         self,
         local_embedding: (
@@ -612,6 +684,14 @@ class GeoTransolver(Module):
         geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
         time: torch.Tensor | None = None,
         return_embedding_states: bool = False,
+        _precomputed_context: (
+            tuple[
+                torch.Tensor | None,
+                list[torch.Tensor] | None,
+                torch.Tensor | None,
+            ]
+            | None
+        ) = None,
     ) -> (
         Float[torch.Tensor, "batch tokens out_dim"]
         | tuple[Float[torch.Tensor, "batch tokens out_dim"], ...]
@@ -642,6 +722,10 @@ class GeoTransolver(Module):
             If ``True``, return ``(output, embedding_states)`` instead of just
             ``output``.  The ``embedding_states`` tensor contains geometry/global
             context of shape :math:`(B, H, S, D_c)`.  Default is ``False``.
+        _precomputed_context : tuple | None, optional
+            Internal hook for hybrid models that need the live context before the
+            GeoTransolver blocks. When supplied, it must be the three-tensor result
+            of :meth:`GlobalContextBuilder.build_context` for these inputs.
 
         Returns
         -------
@@ -717,39 +801,23 @@ class GeoTransolver(Module):
                 )
 
         # Build context embeddings and extract local features
-        embedding_states, local_embedding_bq, geo_ctx = (
-            self.context_builder.build_context(
-                local_embedding, local_positions, geometry, global_embedding
+        if _precomputed_context is None:
+            embedding_states, local_embedding_bq, geo_ctx = (
+                self.context_builder.build_context(
+                    local_embedding, local_positions, geometry, global_embedding
+                )
             )
-        )
+        else:
+            embedding_states, local_embedding_bq, geo_ctx = _precomputed_context
 
-        # --- OOD Guard ---
-        if self.ood_guard is not None:
-            # Pool (B, H, S, D) -> (B, D); guard expects pre-pooled latents.
-            geo_latent = (
-                geo_ctx.mean(dim=(1, 2)) if geo_ctx is not None else None
-            )
-            if self.training:
-                self.ood_guard.collect(global_embedding, geo_latent)
-            else:
-                self.ood_guard.check(global_embedding, geo_latent)
+        self._apply_ood_guard(global_embedding, geo_ctx)
 
         # Project inputs to hidden dimension: (B, N, C) -> (B, N, n_hidden)
         x = [self.preprocess[i](le) for i, le in enumerate(local_embedding)]
 
-        # Concatenate local features if enabled
-        if self.include_local_features and local_embedding_bq is not None:
-            x = [
-                torch.cat([x[i], local_embedding_bq[i]], dim=-1)
-                for i in range(len(x))
-            ]
-
-        # Pass through GALE transformer blocks with context cross-attention
-        for block in self.blocks:
-            x = block(tuple(x), embedding_states)
-
-        # Project to output dimensions: (B, N, n_hidden) -> (B, N, out_dim)
-        x = [self.ln_mlp_out[i](x[i]) for i in range(len(x))]
+        x = self._process_preprocessed_embeddings(
+            x, embedding_states, local_embedding_bq
+        )
 
         if self.structured_shape is not None and unflatten_output:
             B = x[0].shape[0]

@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+_target_: rollout.MeshGeoTransolverOneShot
+_convert_: all
+
+input_dim_nodes: 6   # normalized xyz + three broadcast global parameters
+input_dim_edges: 4   # normalized dx, dy, dz, distance
+output_dim: 250      # 50 future frames * five target fields
+geometry_dim: 3
+global_dim: 3
+
+hidden_dim: 128
+num_heads: 8
+slice_num: 128
+num_pre_processor_layers: 1
+num_attention_layers: 4
+num_post_processor_layers: 2
+use_te: false
+
+num_pre_processor_checkpoint_segments: 1
+num_post_processor_checkpoint_segments: 2
+
+num_time_steps: ${training.num_time_steps}

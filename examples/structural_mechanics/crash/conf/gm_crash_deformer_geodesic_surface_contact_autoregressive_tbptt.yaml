@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+defaults:
+  - gm_crash_deformer_predictive_surface_contact_autoregressive_tbptt
+  - _self_
+
+experiment_name: GM-Crash-DeFormer-FLARE-AR-TBPTT-ReferenceGeodesicSurfaceContact
+
+# Radioss-inspired OPTIONAL reference-edge geodesic exclusion, not a solver-deck
+# reconstruction. All lengths are physical mm BEFORE normalization.
+# Exclude q/f iff min_v_in_f d0(q,v) < sqrt(2)*G(q,f), plus unconditional incidence.
+# G=max(gap_min, gap_scale*(t_q + max_v_in_f t_v)/2).
+# The extra 5 mm predictive-message activation band does NOT enter G.
+datapipe:
+  contact_surface_exclusion: reference_geodesic
+  contact_geodesic_distance_scale: 1.4142135623730951
+  contact_geodesic_gap_scale: 1.0
+  contact_geodesic_gap_min: 0.0
+  contact_geodesic_max_pairs: 16000000
+  # Runtime-only cache; the content key includes physical inputs and options.
+  contact_geodesic_cache_dir: ${datapipe.stats_dir}/surface_geodesic_cache

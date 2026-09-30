@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds experimental DeFormer mesh/attention hybrids and autoregressive crash
+  recipes with predictive node-to-face contact, differentiable surface features,
+  optional reference-geodesic exclusions, and resumable truncated BPTT.
 - Adds `physicsnemo.nn.shrink_and_perturb_`, an in-place shrink-and-perturb
   weight re-initialization for warm-starting from pretrained weights.
 - Adds dimension-generic volume mesh generation for implicit domains to

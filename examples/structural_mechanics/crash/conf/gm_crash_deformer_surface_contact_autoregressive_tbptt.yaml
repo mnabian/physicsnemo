@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+defaults:
+  - gm_crash_deformer_contact_v2_autoregressive_tbptt
+  - _self_
+
+experiment_name: GM-Crash-DeFormer-FLARE-AR-TBPTT-SurfaceContact
+
+# Experimental opt-in. No original solver deck is available. Surface sets,
+# thickness interpolation and exclusions are explicit modeling assumptions.
+datapipe:
+  contact_surface: true
+  contact_exclusion_hops: null
+
+model:
+  contact_graph_backend: surface
+  contact_search_implementation: warp
+  contact_selection_taper: false  # no top-k; keep all eligible node--facet pairs
+  contact_surface_max_pairs: 4000000  # Active-contact safety budget; raw candidates are streamed.
+  contact_activation_distance: 5.0  # positive shell-clearance band, mm
+  node_contact_radius: 10.0  # feature normalization ONLY for the surface backend
+  contact_normal_epsilon: 0.1

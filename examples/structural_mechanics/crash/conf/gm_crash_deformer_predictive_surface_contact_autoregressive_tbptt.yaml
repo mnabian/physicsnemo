@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+defaults:
+  - gm_crash_deformer_surface_contact_autoregressive_tbptt
+  - _self_
+
+experiment_name: GM-Crash-DeFormer-FLARE-AR-TBPTT-PredictiveSurfaceContact
+
+model:
+  # Causal constant-velocity closest approach to two material points: closest at
+  # current and forecast-end geometry, swept over one dt. Not full facet CCD.
+  contact_surface_predictive: true
+  # Transport a validated material center-fan through predicted folding/collapse.
+  # Do not reinterpret each predicted quad as a simple projected polygon.
+  contact_surface_material_fan: true
+  # Safety budget for ACTIVE contacts after exhaustive streamed broad/narrow
+  # phase (65,536 raw pairs/page). Overflow raises; contacts are never truncated.
+  contact_surface_max_pairs: 8000000

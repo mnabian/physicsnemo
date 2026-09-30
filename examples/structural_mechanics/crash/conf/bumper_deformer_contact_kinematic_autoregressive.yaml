@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+defaults:
+  - bumper_deformer_contact_autoregressive
+  - _self_
+
+experiment_name: Bumper-DeFormer-FLARE-AR-KinematicContact
+
+model:
+  contact_dim: 12
+  contact_include_velocity: true
+  contact_velocity_scale: 1000.0
+  contact_smooth_cutoff: true

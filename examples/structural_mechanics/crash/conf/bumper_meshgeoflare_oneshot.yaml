@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Bumper beam crash experiment using FLARE++ plus mesh message passing (one-shot).
+
+# @package _global_
+hydra:
+  job:
+    chdir: True
+  run:
+    dir: ./outputs/
+
+experiment_name: "Bumper-MeshGeoFLARE++"
+
+defaults:
+  - reader: vtp
+  - datapipe: graph
+  - model: meshgeoflare_one_shot
+  - training: default
+  - inference: default
+  - _self_
+
+# The training recipe intentionally matches bumper_geoflare_oneshot.yaml.
+training:
+  raw_data_dir: ???
+  raw_data_dir_validation: ???
+  global_features_filepath: ???
+  optimizer: muon
+  num_time_steps: 51
+  num_training_samples: 121
+  num_validation_samples: 5
+
+inference:
+  raw_data_dir_test: ???
+
+datapipe:
+  static_features: []
+  dynamic_targets:
+    - effective_plastic_strain
+    - stress_vm
+  global_features:
+    - velocity_x
+    - thickness_scale
+    - rwall_origin_y
+  sample_type: all_time_steps
+
+model:
+  functional_dim: 3
+  out_dim: 250
+  global_dim: 3
+  attention_type: "GALE_FPP"
+  attn_scale: null

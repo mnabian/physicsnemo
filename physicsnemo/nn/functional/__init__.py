@@ -53,7 +53,7 @@ from .interpolation import (
     point_to_grid_interpolation,
 )
 from .natten import na1d, na2d, na3d
-from .neighbors import knn, radius_search
+from .neighbors import contact_search, knn, radius_search
 from .regularization_parameterization import drop_path, weight_fact
 from .rendering import (
     isosurface_render,
@@ -67,6 +67,7 @@ from .rendering import (
 )
 
 __all__ = [
+    "contact_search",
     "displace_points",
     "irfft",
     "irfft2",

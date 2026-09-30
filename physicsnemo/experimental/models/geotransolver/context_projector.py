@@ -41,14 +41,11 @@ from einops import rearrange
 from jaxtyping import Float
 
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.nn import BQWarp
-from physicsnemo.nn import Mlp
+from physicsnemo.nn import BQWarp, ConcreteDropout, Mlp
 from physicsnemo.nn.module.physics_attention import (
     _compute_slices_from_projections,
     _project_input,
 )
-
-from physicsnemo.nn import ConcreteDropout
 
 # Check optional dependency availability
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
@@ -101,15 +98,11 @@ def _structured_grid_to_conv_input(
     if ndim == 2:
         H, W = spatial_shape
         if tokens != H * W:
-            raise ValueError(
-                f"Expected N={H * W} tokens for 2D grid, got N={tokens}"
-            )
+            raise ValueError(f"Expected N={H * W} tokens for 2D grid, got N={tokens}")
         return x.view(batch, H, W, channels).permute(0, 3, 1, 2)
     H, W, D = spatial_shape
     if tokens != H * W * D:
-        raise ValueError(
-            f"Expected N={H * W * D} tokens for 3D grid, got N={tokens}"
-        )
+        raise ValueError(f"Expected N={H * W * D} tokens for 3D grid, got N={tokens}")
     return x.view(batch, H, W, D, channels).permute(0, 4, 1, 2, 3)
 
 
@@ -323,8 +316,12 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         """
         fx = None if self.plus else self.in_project_fx
         return _project_input(
-            x, self.in_project_x, self.heads, self.dim_head,
-            "B N (H D) -> B N H D", project_fx=fx,
+            x,
+            self.in_project_x,
+            self.heads,
+            self.dim_head,
+            "B N (H D) -> B N H D",
+            project_fx=fx,
         )
 
     def forward(
@@ -374,9 +371,7 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         slice_projections = self.in_project_slice(projected_x)
 
         # Compute weighted aggregation of features into slice tokens
-        _, slice_tokens = self._compute_slices(
-            slice_projections, feature_projection
-        )
+        _, slice_tokens = self._compute_slices(slice_projections, feature_projection)
 
         # Apply concrete dropout to output slice tokens
         if self.output_dropout is not None:
@@ -455,9 +450,7 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         ]
     ):
         B, N, C = x.shape
-        grid = _structured_grid_to_conv_input(
-            x, B, N, C, self._nd, self.spatial_shape
-        )
+        grid = _structured_grid_to_conv_input(x, B, N, C, self._nd, self.spatial_shape)
         pattern = (
             "B (H D) h w -> B (h w) H D"
             if self._nd == 2
@@ -465,8 +458,12 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         )
         fx = None if self.plus else self.in_project_fx
         return _project_input(
-            grid, self.in_project_x, self.heads, self.dim_head,
-            pattern, project_fx=fx,
+            grid,
+            self.in_project_x,
+            self.heads,
+            self.dim_head,
+            pattern,
+            project_fx=fx,
         )
 
     def forward(
@@ -483,9 +480,7 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         else:
             projected_x, feature_projection = self._grid_project(x)
         slice_projections = self.in_project_slice(projected_x)
-        _, slice_tokens = self._compute_slices(
-            slice_projections, feature_projection
-        )
+        _, slice_tokens = self._compute_slices(slice_projections, feature_projection)
 
         # Apply concrete dropout to output slice tokens
         if self.output_dropout is not None:
@@ -919,7 +914,13 @@ class GlobalContextBuilder(nn.Module):
                 )
             else:
                 self.geometry_tokenizer = ContextProjector(
-                    geometry_dim, n_head, dim_head, dropout, slice_num, use_te, plus=plus, 
+                    geometry_dim,
+                    n_head,
+                    dim_head,
+                    dropout,
+                    slice_num,
+                    use_te,
+                    plus=plus,
                     concrete_dropout=concrete_dropout,
                 )
             context_dim += dim_head
@@ -963,6 +964,7 @@ class GlobalContextBuilder(nn.Module):
         geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
         global_embedding: Float[torch.Tensor, "batch global_tokens global_dim"]
         | None = None,
+        detach_geometry_context: bool = True,
     ) -> tuple[
         Float[torch.Tensor, "batch heads slices context_dim"] | None,
         list[Float[torch.Tensor, "batch tokens local_features"]] | None,
@@ -983,6 +985,12 @@ class GlobalContextBuilder(nn.Module):
             Geometry features of shape :math:`(B, N, C_{geo})`. Default is ``None``.
         global_embedding : torch.Tensor | None, optional
             Global embedding of shape :math:`(B, N_g, C_g)`. Default is ``None``.
+        detach_geometry_context : bool, optional
+            Detach the separately returned geometry-tokenizer output. Observers such
+            as the OOD guard should retain the default. Hybrid processors that reuse
+            the live geometry context for trainable conditioning can set this to
+            ``False``. The context supplied to GALE blocks is never detached.
+            Default is ``True``.
 
         Returns
         -------
@@ -993,10 +1001,11 @@ class GlobalContextBuilder(nn.Module):
             - ``local_features``: List of local feature tensors, one per input type,
               each of shape :math:`(B, N, D_l)`, or ``None`` if local features are
               disabled.
-            - ``geometry_context_detached``: Detached geometry-tokenizer output of shape
-              :math:`(B, H, S, D)`, intended for downstream observers such as the
-              embedded OOD guard.  ``None`` when geometry tokenization is disabled
-              or no geometry was provided.
+            - ``geometry_context``: Geometry-tokenizer output of shape
+              :math:`(B, H, S, D)`. It is detached by default for downstream
+              observers such as the embedded OOD guard, and remains live when
+              ``detach_geometry_context=False``. ``None`` when geometry tokenization
+              is disabled or no geometry was provided.
 
         Raises
         ------
@@ -1016,7 +1025,7 @@ class GlobalContextBuilder(nn.Module):
 
         context_parts = []
         local_features = None
-        geometry_context_detached: torch.Tensor | None = None
+        returned_geometry_context: torch.Tensor | None = None
 
         if local_positions is None and self.local_extractors is not None:
             raise ValueError(
@@ -1044,9 +1053,11 @@ class GlobalContextBuilder(nn.Module):
         # Tokenize geometry features
         if self.geometry_tokenizer is not None and geometry is not None:
             geometry_context = self.geometry_tokenizer(geometry)
-            # Detach the returned copy so downstream observers (e.g. the OOD
-            # guard) don't keep the backward graph alive.
-            geometry_context_detached = geometry_context.detach()
+            returned_geometry_context = (
+                geometry_context.detach()
+                if detach_geometry_context
+                else geometry_context
+            )
             context_parts.append(geometry_context)
 
         # Tokenize global embedding
@@ -1056,4 +1067,4 @@ class GlobalContextBuilder(nn.Module):
         # Concatenate all context features along the last dimension
         context = torch.cat(context_parts, dim=-1) if context_parts else None
 
-        return context, local_features, geometry_context_detached
+        return context, local_features, returned_geometry_context

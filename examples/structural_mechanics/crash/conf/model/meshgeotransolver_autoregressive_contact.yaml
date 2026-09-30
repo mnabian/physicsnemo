@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+_target_: rollout.MeshGeoTransolverAutoregressive
+_convert_: all
+
+input_dim_nodes: 9
+input_dim_edges: 4
+output_dim: 5
+geometry_dim: 3
+global_dim: 3
+
+hidden_dim: 128
+num_heads: 8
+slice_num: 128
+num_pre_processor_layers: 1
+num_attention_layers: 4
+num_post_processor_layers: 2
+use_te: false
+
+use_contact: true
+contact_dim: 8
+contact_gate_init: 0.0
+contact_aggregation: mean
+num_pre_processor_checkpoint_segments: 1
+num_post_processor_checkpoint_segments: 2
+
+num_time_steps: ${training.num_time_steps}
+dt: 5.0e-3
+velocity_feature: velocity_x
+velocity_axis: 0
+velocity_unit_scale: 1000.0
+checkpoint_rollout: true
+
+enable_contact: true
+enable_node_contact: true
+node_contact_radius: 10.0
+contact_max_neighbors: 16
+contact_candidate_neighbors: 64
+exclude_same_component: false
+base_shell_thickness: 2.0
+
+enable_cylinder_contact: true
+cylinder_center_x: -170.0
+cylinder_center_z: 0.0
+cylinder_radius: 127.0
+cylinder_search_distance: 200.0
+cylinder_center_y_feature: rwall_origin_y

@@ -7,9 +7,28 @@ Automotive crashworthiness assessment is a critical step in vehicle design. Trad
 
 Machine Learning (ML) surrogates provide a promising alternative by learning mappings directly from simulation data, enabling rapid prediction of deformation histories across thousands of design candidates.
 
-In this recipe, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, MeshGraphNet, and FIGConvUNet architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
+In this recipe, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, MeshGraphNet, FIGConvUNet, MeshTransolver, MeshGeoTransolver, and MeshGeoFLARE architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
 
-For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201).
+For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201). The reusable mesh-attention hybrids and sparse-contact autoregressive recipe reproduce the architecture family described in [Crash Assessment via Mesh-Based Graph Neural Networks and Physics-Aware Attention](https://arxiv.org/pdf/2605.11784); see [PAPER_ARCHITECTURE_REPRODUCTION.md](PAPER_ARCHITECTURE_REPRODUCTION.md) for the exact implementation contract and explicitly inferred choices.
+
+### DeFormer with geodesic-filtered surface contact
+
+The reference contact configuration is
+`gm_crash_deformer_geodesic_gap5_surface_contact_autoregressive_tbptt`.
+It combines the corrected latent-space mesh processor with original point-space
+FLARE (`GALE_FA`), predictive node-to-face messages, reference-geodesic exclusions,
+and fixed four-step truncated BPTT. Its default budget is 500 epochs without
+teacher forcing or early stopping; validation rolls out all 24 predicted steps
+after two observed frames. Node inputs are velocity and thickness, with position
+used by the geometry and contact pathways. This is not the newer position-input,
+latent-attention, or increasing-window curriculum ablation.
+
+See [surface-contact methodology](../../../SURFACE_CONTACT.md) and
+[reference-geodesic exclusions](SURFACE_CONTACT_REFERENCE_GEODESIC.md).
+The 5 mm geodesic gap floor is an explicit modeling assumption, separate from
+the message-activation band, not a recovered solver-deck setting. Dataset paths
+and splits must be supplied by the user; no proprietary datasets or trained
+checkpoints are included.
 
 ### Body-in-White Crash Modeling
 
@@ -150,6 +169,14 @@ The main script is `train.py`.
 
 ```
 conf/
+├── bumper_meshtransolver_oneshot.yaml
+├── bumper_meshgeotransolver_oneshot.yaml
+├── bumper_meshgeoflare_oneshot.yaml
+├── bumper_meshtransolver_autoregressive_contact.yaml
+├── bumper_meshgeotransolver_autoregressive_contact.yaml
+├── bumper_meshgeoflare_autoregressive_contact.yaml
+├── bumper_meshgeoflare_autoregressive_teacher_forced.yaml
+├── bumper_meshgeoflarepp_pre_post_geometry_global_autoregressive_teacher_forced.yaml
 ├── bumper_geotransolver_oneshot.yaml       # ← self-contained experiment configs
 ├── bumper_geotransolver_time_conditional.yaml
 ├── crash_geotransolver_oneshot.yaml
@@ -166,6 +193,13 @@ conf/
 │   ├── transolver_one_shot.yaml
 │   ├── figconvunet_one_shot.yaml
 │   ├── mgn_one_shot.yaml
+│   ├── meshtransolver_one_shot.yaml
+│   ├── meshgeotransolver_one_shot.yaml
+│   ├── meshgeoflare_one_shot.yaml
+│   ├── meshtransolver_autoregressive_contact.yaml
+│   ├── meshgeotransolver_autoregressive_contact.yaml
+│   ├── meshgeoflare_autoregressive_contact.yaml
+│   ├── meshgeoflare_autoregressive_teacher_forced.yaml
 │   └── ...
 ├── reader/                                # reader configs
 │   ├── vtp.yaml
@@ -189,6 +223,99 @@ Multi-GPU (Distributed Data Parallel):
 ```bash
 torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=bumper_geotransolver_oneshot
 ```
+
+### Mesh-attention paper variants
+
+Phase-one one-shot experiments predict all 50 future bumper frames and all five
+configured fields in one forward pass:
+
+```bash
+python train.py --config-name=bumper_meshtransolver_oneshot \
+  training.raw_data_dir=/data/bumper_beam/train \
+  training.raw_data_dir_validation=/data/bumper_beam/validation \
+  training.global_features_filepath=/data/bumper_beam/global_features.json
+```
+
+Replace the config name with `bumper_meshgeotransolver_oneshot` or
+`bumper_meshgeoflare_oneshot` for the geometry-aware variants.
+
+The contact-free autoregressive ablation trains all 50 one-step transitions with
+teacher forcing and no temporal backpropagation, while validation and inference
+remain fully closed-loop. The baseline and richer Pre+post+global context variants
+use the same 2,500-epoch recipe:
+
+```bash
+python train.py \
+  --config-name=bumper_meshgeoflarepp_pre_post_geometry_global_autoregressive_teacher_forced \
+  training.raw_data_dir=/data/bumper_beam/train \
+  training.raw_data_dir_validation=/data/bumper_beam/validation \
+  training.global_features_filepath=/data/bumper_beam/global_features.json
+```
+
+Use `bumper_meshgeoflare_autoregressive_teacher_forced` for the matched context-free
+baseline. No explicit node or rigid-cylinder contact graph is constructed in these
+two experiments. The impact velocity, thickness scale, and cylinder Y position are
+still supplied as global parameters; the fixed cylinder X/Z position and radius are
+therefore learned as dataset constants rather than encoded explicitly.
+
+Phase-two experiments predict acceleration and feed the semi-implicit Euler update
+back through a 50-step closed-loop rollout. Finite-element connectivity and
+structural edge attributes remain fixed as reference-mesh material data; sparse
+node-to-node contact and analytic cylinder contact are rebuilt from the current
+predicted positions at every step:
+
+```bash
+python train.py --config-name=bumper_meshtransolver_autoregressive_contact \
+  training.raw_data_dir=/data/bumper_beam/train \
+  training.raw_data_dir_validation=/data/bumper_beam/validation \
+  training.global_features_filepath=/data/bumper_beam/global_features.json
+```
+
+Use `bumper_meshgeotransolver_autoregressive_contact` or
+`bumper_meshgeoflare_autoregressive_contact` for the paper's `k=16`
+geometry-aware contact models; MeshTransolver uses `k=32`.
+
+All six mesh-attention experiments validate every epoch and stop after 20 validation
+evaluations without improvement. Set `training.early_stopping_patience=0` to disable
+this behavior or adjust `training.early_stopping_min_delta` to require a larger
+absolute MSE improvement.
+
+The public bumper VTP files export a zero-valued thickness field. The contact recipe
+therefore uses a configurable 2.0 mm nominal thickness multiplied by
+`thickness_scale`, midway between the source deck's 1.8 and 2.2 mm shell properties.
+A non-zero thickness value supplied by another reader takes precedence on that node;
+missing or zero entries use the fallback. Thickness offsets both node-to-node and
+analytic-cylinder signed gaps. The 10 mm node-contact radius is an engineering
+starting point because the paper does not report its radius; keep it as a tuned
+training-only hyperparameter. The analytic cylinder is reconstructed from the source
+deck using center `(-170, rwall_origin_y, 0)`, radius 127 mm, and a 200 mm search
+distance.
+
+For a matched-seed contact ablation, override only
+`model.enable_contact=false`. The configured contact block remains instantiated and
+receives an empty graph, preserving model parameters and initialization. Set both
+`model.enable_contact=false model.use_contact=false` only when the contact module
+should be removed entirely.
+
+The current bumper `validation/` and `test/` VTP files are byte-identical. Preserve
+the supplied split if required for compatibility, but report test numbers as
+repeated-validation results rather than independent generalization estimates.
+
+Validate contact construction over every ground-truth frame before training with a
+new dataset or contact configuration:
+
+```bash
+python contact_diagnostics.py \
+  --vtp=/data/bumper_beam/train/run2.vtp \
+  --global-features=/data/bumper_beam/global_features.json \
+  --device=cuda \
+  --output=run2_contact_diagnostics.json
+```
+
+The report includes component sizes, candidate counts, top-k occupancy, structural
+edge overlap, signed node gaps, analytic cylinder gaps, and graph-build time. It does
+not report precision or recall because the supplied VTP files contain no FE contact
+labels.
 
 ## Inference
 
@@ -347,26 +474,39 @@ datapipe:
 | `crash_geotransolver_oneshot.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=crash_geotransolver_oneshot` |
 | `bumper_geoflare_oneshot.yaml` | Bumper beam (VTP) | GeoFLARE one-shot | `python train.py --config-name=bumper_geoflare_oneshot` |
 | `crash_geoflare_oneshot.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=crash_geoflare_oneshot` |
+| `bumper_meshtransolver_oneshot.yaml` | Bumper beam (VTP) | MeshTransolver one-shot | `python train.py --config-name=bumper_meshtransolver_oneshot` |
+| `bumper_meshgeotransolver_oneshot.yaml` | Bumper beam (VTP) | MeshGeoTransolver one-shot | `python train.py --config-name=bumper_meshgeotransolver_oneshot` |
+| `bumper_meshgeoflare_oneshot.yaml` | Bumper beam (VTP) | MeshGeoFLARE++ one-shot | `python train.py --config-name=bumper_meshgeoflare_oneshot` |
+| `bumper_meshgeoflare_autoregressive_teacher_forced.yaml` | Bumper beam (VTP) | MeshGeoFLARE++ teacher-forced rollout | `python train.py --config-name=bumper_meshgeoflare_autoregressive_teacher_forced` |
+| `bumper_meshgeoflarepp_pre_post_geometry_global_autoregressive_teacher_forced.yaml` | Bumper beam (VTP) | MeshGeoFLARE++ Pre+post+global teacher-forced rollout | `python train.py --config-name=bumper_meshgeoflarepp_pre_post_geometry_global_autoregressive_teacher_forced` |
+| `bumper_meshtransolver_autoregressive_contact.yaml` | Bumper beam (VTP) | MeshTransolver contact rollout | `python train.py --config-name=bumper_meshtransolver_autoregressive_contact` |
+| `bumper_meshgeotransolver_autoregressive_contact.yaml` | Bumper beam (VTP) | MeshGeoTransolver contact rollout | `python train.py --config-name=bumper_meshgeotransolver_autoregressive_contact` |
+| `bumper_meshgeoflare_autoregressive_contact.yaml` | Bumper beam (VTP) | MeshGeoFLARE++ contact rollout | `python train.py --config-name=bumper_meshgeoflare_autoregressive_contact` |
 
 ### Choosing a time scheme
 
-Two rollout schemes are supported, selected by the experiment config (model + datapipe):
+Three rollout schemes have premade experiment configurations:
 
 | Scheme | Model | Datapipe `sample_type` | Behavior |
 |--------|-------|------------------------|----------|
 | **One-shot** | `geotransolver_one_shot` | `all_time_steps` | One sample per run. Model predicts the full trajectory `[N, T-1, Fo]` from t0 in a single forward pass. Lower training cost, competitive accuracy. |
 | **Time-conditional** | `geotransolver_time_conditional` | `one_time_step` | One sample per run per timestep. Model predicts a single step `[N, Fo]` conditioned on normalized time `t/(T-1)`. Best accuracy for long horizons; higher training cost. Inference always rolls out the full trajectory. |
+| **Teacher-forced autoregressive** | `meshgeoflare_autoregressive_teacher_forced` | `all_time_steps` | Training supervises all transitions independently using ground-truth state history, so gradients do not propagate between time steps. Validation and inference feed predictions back through a 50-step closed-loop rollout. |
+| **Autoregressive contact** | `mesh*autoregressive_contact` | `all_time_steps` | Model predicts acceleration, integrates position and velocity, rebuilds contact from predicted geometry, and feeds the state back for every future step. |
 
-Use **one-shot** when you need fast iteration or have limited compute. Use **time-conditional** when validation quality matters most. See [Development tips](#development-tips) for a comparison table.
-
-Two additional schemes are available in the rollout (`geotransolver_autoregressive_rollout_training`, `geotransolver_one_step_rollout`) but are not provided as premade experiment configs. You can enable them by selecting the corresponding model in `conf/model/` and configuring the datapipe accordingly.
+Use **one-shot** when you need fast iteration or have limited compute. Use
+**time-conditional** when validation quality matters most. Use **autoregressive
+contact** when deployment requires closed-loop dynamics and geometry-dependent
+interactions. Legacy `geotransolver_autoregressive_rollout_training` and
+`geotransolver_one_step_rollout` components also remain available for custom
+experiments. See [Development tips](#development-tips) for the legacy comparison.
 
 ### Adding a new experiment
 
 1. Create `conf/<my_experiment>.yaml` following the template above.
 2. Set defaults for reader, datapipe, model, training, and inference in the `defaults` section.
 3. Set all required fields: `raw_data_dir`, `raw_data_dir_validation` (training), `raw_data_dir_test` (inference), `num_time_steps`, `num_training_samples`. Either set concrete paths in the config or use `???` and pass them via CLI when launching `train.py` or `inference.py` as appropriate.
-4. Set `datapipe.sample_type` to match your model: `all_time_steps` for one-shot, `one_time_step` for time-conditional.
+4. Set `datapipe.sample_type` to match your model: `all_time_steps` for one-shot or autoregressive rollout, `one_time_step` for time-conditional.
 5. If using global features, set `global_features_filepath`; otherwise use `null`.
 6. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it in the defaults.
 7. Run: `python train.py --config-name=<my_experiment>`
@@ -447,13 +587,16 @@ To disable global features entirely, omit `global_features_filepath` (or leave i
 
 #### How the datapipe and model consume global features
 
-At `__getitem__` time, the datapipe converts the selected scalars to a dict of scalar tensors and attaches them to the `SimSample`:
+Training computes mean and standard deviation from the training split and saves them
+with the other dataset statistics. Validation, test, and inference reuse those values
+without recomputing them. At `__getitem__` time, the datapipe standardizes each
+selected scalar and attaches it to the `SimSample`:
 
 ```python
 sample.global_features = {
-    "velocity_x":      tensor(-5.0),
-    "thickness_scale": tensor(1.0),
-    "rwall_origin_y":  tensor(0.0),
+    "velocity_x":      tensor(z_velocity_x),
+    "thickness_scale": tensor(z_thickness_scale),
+    "rwall_origin_y":  tensor(z_rwall_origin_y),
 }
 ```
 
@@ -464,7 +607,10 @@ In the model forward pass, these are stacked into a single global embedding vect
 global_dim: 3   # must match len(datapipe.global_features)
 ```
 
-If `global_features` is `null`, `sample.global_features` is `None` and the model must handle this case (currently only `GeoTransolverOneShot` uses global features; other models ignore them).
+If `global_features` is `null`, `sample.global_features` is `None` and the selected
+model must support unconditioned execution. GeoTransolver and the geometry-aware
+mesh hybrids consume the global token directly; the mesh-attention crash wrappers
+also broadcast configured global values into their node inputs.
 
 ## Reader: built-in VTP and Zarr readers and how to add your own
 
@@ -708,7 +854,7 @@ Muon: Car-crash test MSE at probe location (Driver, Passenger):
 
 ## TODO
 
-- [ ] **Normalize global features**: Global features (e.g., velocity_x, thickness_scale, rwall_origin_y) are currently passed to the model without normalization. Add support for computing and applying per-feature mean/std (or similar) so global inputs are normalized consistently with node features and positions.
+- [x] **Normalize global features**: Training-only mean/std statistics are saved and reused for validation, test, inference, and physical-value reconstruction during autoregressive rollout.
 - [ ] **Normalize dynamic targets**: Dynamic targets (e.g., effective_plastic_strain, stress_vm) are currently passed in the target `y` without normalization, while positions are normalized. Add per-target mean/std and denormalize at inference when exporting to VTP.
 - [ ] **Support batch_size > 1**: The pipeline currently uses `batch_size=1` due to variable node counts per sample. Add padding or batching logic to enable larger batch sizes for improved throughput.
 
@@ -729,6 +875,7 @@ Muon: Car-crash test MSE at probe location (Driver, Passenger):
 ## References
 
 - [Automotive Crash Dynamics Modeling Accelerated with Machine Learning](https://arxiv.org/pdf/2510.15201)
-- [GeoTransolver: Learning Physics on Irregular Domains Using Multi-scale Geometry Aware Physics Attention Transformer](https://arxiv.org/pdf/2512.20399)]
+- [Crash Assessment via Mesh-Based Graph Neural Networks and Physics-Aware Attention](https://arxiv.org/pdf/2605.11784)
+- [GeoTransolver: Learning Physics on Irregular Domains Using Multi-scale Geometry Aware Physics Attention Transformer](https://arxiv.org/pdf/2512.20399)
 - [Transolver: A Fast Transformer Solver for PDEs on General Geometries](https://arxiv.org/pdf/2402.02366)
 - [Learning Mesh-Based Simulation with Graph Networks](https://arxiv.org/pdf/2010.03409)

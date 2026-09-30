@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+defaults:
+  - gm_crash_deformer_predictive_surface_contact_autoregressive_tbptt
+  - _self_
+
+experiment_name: GM-Crash-DeFormer-FLARE-AR-TBPTT-OneRingSurfaceContact
+
+# Isolated ablation: exclude a node/facet pair if the node shares an original
+# element with any facet vertex. Keep distant same-component self-contact.
+# No changes to attention, model parameters, forecast, gap band, loss or budget.
+datapipe:
+  contact_surface_exclusion: one_ring

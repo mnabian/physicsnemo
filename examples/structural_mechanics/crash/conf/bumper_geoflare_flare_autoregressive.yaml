@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# @package _global_
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: ./outputs/
+
+experiment_name: "Bumper-GeoFLARE-FLARE-ClosedLoop-AR"
+
+defaults:
+  - reader: vtp
+  - datapipe: point_cloud
+  - model: geoflare_autoregressive
+  - training: default
+  - inference: default
+  - _self_
+
+training:
+  raw_data_dir: ???
+  raw_data_dir_validation: ???
+  global_features_filepath: ???
+  optimizer: muon
+  amp: true
+  amp_dtype: float16
+  seed: 42
+  num_time_steps: 51
+  num_training_samples: 121
+  num_validation_samples: 5
+  epochs: 10000
+  validation_freq: 10
+  save_checkpoint_freq: 100
+  early_stopping_patience: 0
+  acceleration_loss_weight: 0.0
+
+inference:
+  raw_data_dir_test: ???
+
+datapipe:
+  static_features: []
+  dynamic_targets:
+    - effective_plastic_strain
+    - stress_vm
+  global_features:
+    - velocity_x
+    - thickness_scale
+    - rwall_origin_y
+  sample_type: all_time_steps

@@ -9,19 +9,20 @@ Machine Learning (ML) surrogates provide a promising alternative by learning map
 
 In this recipe, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, MeshGraphNet, FIGConvUNet, MeshTransolver, MeshGeoTransolver, and MeshGeoFLARE architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
 
-For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201). The reusable mesh-attention hybrids and sparse-contact autoregressive recipe reproduce the architecture family described in [Crash Assessment via Mesh-Based Graph Neural Networks and Physics-Aware Attention](https://arxiv.org/pdf/2605.11784); see [PAPER_ARCHITECTURE_REPRODUCTION.md](PAPER_ARCHITECTURE_REPRODUCTION.md) for the exact implementation contract and explicitly inferred choices.
+For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201). DeFormer adds structural mesh message passing around a geometry-aware FLARE backbone, with optional predictive node-to-face contact for closed-loop autoregressive dynamics.
 
 ### DeFormer with geodesic-filtered surface contact
 
 The reference contact configuration is
-`gm_crash_deformer_geodesic_gap5_surface_contact_autoregressive_tbptt`.
+`crash_deformer_contact_autoregressive`.
 It combines the corrected latent-space mesh processor with original point-space
 FLARE (`GALE_FA`), predictive node-to-face messages, reference-geodesic exclusions,
 and fixed four-step truncated BPTT. Its default budget is 500 epochs without
 teacher forcing or early stopping; validation rolls out all 24 predicted steps
 after two observed frames. Node inputs are velocity and thickness, with position
-used by the geometry and contact pathways. This is not the newer position-input,
-latent-attention, or increasing-window curriculum ablation.
+used by the geometry and contact pathways. The paired baselines are
+`crash_deformer_autoregressive` (no contact) and `crash_geoflare_autoregressive`
+(no structural or contact message passing).
 
 See [reference-geodesic exclusions](SURFACE_CONTACT_REFERENCE_GEODESIC.md).
 The 5 mm geodesic gap floor is an explicit modeling assumption, separate from
@@ -166,48 +167,20 @@ The main script is `train.py`.
 
 ### Config Structure
 
-```
-conf/
-├── bumper_meshtransolver_oneshot.yaml
-├── bumper_meshgeotransolver_oneshot.yaml
-├── bumper_meshgeoflare_oneshot.yaml
-├── bumper_meshtransolver_autoregressive_contact.yaml
-├── bumper_meshgeotransolver_autoregressive_contact.yaml
-├── bumper_meshgeoflare_autoregressive_contact.yaml
-├── bumper_meshgeoflare_autoregressive_teacher_forced.yaml
-├── bumper_meshgeoflarepp_pre_post_geometry_global_autoregressive_teacher_forced.yaml
-├── bumper_geotransolver_oneshot.yaml       # ← self-contained experiment configs
-├── bumper_geotransolver_time_conditional.yaml
-├── crash_geotransolver_oneshot.yaml
-├── bumper_geoflare_oneshot.yaml
-├── crash_geoflare_oneshot.yaml
-├── datapipe/                              # dataset configs (generic defaults)
-│   ├── graph.yaml
-│   └── point_cloud.yaml
-├── model/                                 # model configs
-│   ├── geotransolver_one_shot.yaml
-│   ├── geotransolver_autoregressive_rollout_training.yaml
-│   ├── geotransolver_one_step_rollout.yaml
-│   ├── geotransolver_time_conditional.yaml
-│   ├── transolver_one_shot.yaml
-│   ├── figconvunet_one_shot.yaml
-│   ├── mgn_one_shot.yaml
-│   ├── meshtransolver_one_shot.yaml
-│   ├── meshgeotransolver_one_shot.yaml
-│   ├── meshgeoflare_one_shot.yaml
-│   ├── meshtransolver_autoregressive_contact.yaml
-│   ├── meshgeotransolver_autoregressive_contact.yaml
-│   ├── meshgeoflare_autoregressive_contact.yaml
-│   ├── meshgeoflare_autoregressive_teacher_forced.yaml
-│   └── ...
-├── reader/                                # reader configs
-│   ├── vtp.yaml
-│   └── zarr.yaml
-├── training/default.yaml                  # generic training hyperparameters
-└── inference/default.yaml                 # generic inference options
-```
+The existing bumper and body-in-white one-shot/time-conditional experiments remain
+available. This contribution adds three autoregressive entry points:
 
-Each experiment config is self-contained with its own defaults for reader, datapipe, model, training, and inference. All experiment-specific settings (data paths, dataset sizes, feature lists) are defined directly in the experiment config file.
+| Experiment | Model |
+|------------|-------|
+| `crash_geoflare_autoregressive` | GeoTransolver with original point-space FLARE |
+| `crash_deformer_autoregressive` | DeFormer without contact |
+| `crash_deformer_contact_autoregressive` | DeFormer with predictive geodesic-filtered surface contact |
+
+The DeFormer experiment inherits the GeoFLARE data/training recipe and switches to
+a graph datapipe and mesh model. The contact experiment inherits DeFormer and adds
+contact, reproducible sampling, and memory settings. Two model definitions live in
+`conf/model/`; reader, datapipe, training, and inference defaults are shared with
+the existing examples. See [configuration layout](conf/README.md) for overrides.
 
 ### Launch Training
 
@@ -223,98 +196,64 @@ Multi-GPU (Distributed Data Parallel):
 torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=bumper_geotransolver_oneshot
 ```
 
-### Mesh-attention paper variants
+### DeFormer autoregressive comparison
 
-Phase-one one-shot experiments predict all 50 future bumper frames and all five
-configured fields in one forward pass:
-
-```bash
-python train.py --config-name=bumper_meshtransolver_oneshot \
-  training.raw_data_dir=/data/bumper_beam/train \
-  training.raw_data_dir_validation=/data/bumper_beam/validation \
-  training.global_features_filepath=/data/bumper_beam/global_features.json
-```
-
-Replace the config name with `bumper_meshgeotransolver_oneshot` or
-`bumper_meshgeoflare_oneshot` for the geometry-aware variants.
-
-The contact-free autoregressive ablation trains all 50 one-step transitions with
-teacher forcing and no temporal backpropagation, while validation and inference
-remain fully closed-loop. The baseline and richer Pre+post+global context variants
-use the same 2,500-epoch recipe:
+Run one of the three entry points with your dataset paths:
 
 ```bash
-python train.py \
-  --config-name=bumper_meshgeoflarepp_pre_post_geometry_global_autoregressive_teacher_forced \
-  training.raw_data_dir=/data/bumper_beam/train \
-  training.raw_data_dir_validation=/data/bumper_beam/validation \
-  training.global_features_filepath=/data/bumper_beam/global_features.json
+torchrun --nproc_per_node=<NUM_GPUS> train.py \
+  --config-name=crash_deformer_contact_autoregressive \
+  training.raw_data_dir=/data/crash/train \
+  training.raw_data_dir_validation=/data/crash/validation
 ```
 
-Use `bumper_meshgeoflare_autoregressive_teacher_forced` for the matched context-free
-baseline. No explicit node or rigid-cylinder contact graph is constructed in these
-two experiments. The impact velocity, thickness scale, and cylinder Y position are
-still supplied as global parameters; the fixed cylinder X/Z position and radius are
-therefore learned as dataset constants rather than encoded explicitly.
+Replace the config name with `crash_deformer_autoregressive` or
+`crash_geoflare_autoregressive` for the baselines. These are fresh model runs,
+not interchangeable checkpoints. Use separate output directories when launching
+comparisons concurrently, for example `hydra.run.dir=./outputs/deformer_contact`.
 
-Phase-two experiments predict acceleration and feed the semi-implicit Euler update
-back through a 50-step closed-loop rollout. Finite-element connectivity and
-structural edge attributes remain fixed as reference-mesh material data; sparse
-node-to-node contact and analytic cylinder contact are rebuilt from the current
-predicted positions at every step:
+The reference defaults assume 127 training cases, 8 validation cases, and 26
+frames spaced 5 ms apart. All models use velocity and thickness inputs, predict
+acceleration, and train with random four-transition closed-loop BPTT windows.
+The two initial observed frames initialize velocity; validation and inference
+roll out the remaining 24 transitions. The common budget is 500 epochs with
+Muon, BF16, a cosine learning-rate schedule from `2e-4` to `1e-6`, and no
+teacher forcing or early stopping. Supply sample counts and time-step settings
+appropriate for a different dataset.
+
+The contact recipe requires valid triangle/quad connectivity and nodal shell
+thickness in physical units (mm for the reference data). It rebuilds live
+node-to-face contact from the predicted geometry, uses barycentric surface
+features rather than face centroids, and retains gradients through the selected
+geometry and contact messages. Candidate membership is discrete. The geometry is
+denormalized before contact computation; reference-geodesic exclusions use
+initial physical geometry. This is solver-inspired learned messaging, not a
+contact-force solver or a nonpenetration guarantee.
+
+The contact recipe additionally enables deterministic sampling, RNG-isolated
+contact initialization, nested contact checkpointing, and activation offloading.
+Those execution/reproducibility settings are explicit; they are not silently
+assumed identical to the historical no-contact recipe.
+
+Small ablations are overrides instead of separate YAML files:
 
 ```bash
-python train.py --config-name=bumper_meshtransolver_autoregressive_contact \
-  training.raw_data_dir=/data/bumper_beam/train \
-  training.raw_data_dir_validation=/data/bumper_beam/validation \
-  training.global_features_filepath=/data/bumper_beam/global_features.json
+# Incidence-only exclusions; keep the same model and training budget.
+python train.py --config-name=crash_deformer_contact_autoregressive \
+  datapipe.contact_surface_exclusion=incidence \
+  training.raw_data_dir=/data/crash/train \
+  training.raw_data_dir_validation=/data/crash/validation
+
+# Print the recipe without starting training.
+python train.py --config-name=crash_deformer_contact_autoregressive --cfg job
 ```
 
-Use `bumper_meshgeotransolver_autoregressive_contact` or
-`bumper_meshgeoflare_autoregressive_contact` for the paper's `k=16`
-geometry-aware contact models; MeshTransolver uses `k=32`.
-
-All six mesh-attention experiments validate every epoch and stop after 20 validation
-evaluations without improvement. Set `training.early_stopping_patience=0` to disable
-this behavior or adjust `training.early_stopping_min_delta` to require a larger
-absolute MSE improvement.
-
-The public bumper VTP files export a zero-valued thickness field. The contact recipe
-therefore uses a configurable 2.0 mm nominal thickness multiplied by
-`thickness_scale`, midway between the source deck's 1.8 and 2.2 mm shell properties.
-A non-zero thickness value supplied by another reader takes precedence on that node;
-missing or zero entries use the fallback. Thickness offsets both node-to-node and
-analytic-cylinder signed gaps. The 10 mm node-contact radius is an engineering
-starting point because the paper does not report its radius; keep it as a tuned
-training-only hyperparameter. The analytic cylinder is reconstructed from the source
-deck using center `(-170, rwall_origin_y, 0)`, radius 127 mm, and a 200 mm search
-distance.
-
-For a matched-seed contact ablation, override only
-`model.enable_contact=false`. The configured contact block remains instantiated and
-receives an empty graph, preserving model parameters and initialization. Set both
-`model.enable_contact=false model.use_contact=false` only when the contact module
-should be removed entirely.
-
-The current bumper `validation/` and `test/` VTP files are byte-identical. Preserve
-the supplied split if required for compatibility, but report test numbers as
-repeated-validation results rather than independent generalization estimates.
-
-Validate contact construction over every ground-truth frame before training with a
-new dataset or contact configuration:
-
-```bash
-python contact_diagnostics.py \
-  --vtp=/data/bumper_beam/train/run2.vtp \
-  --global-features=/data/bumper_beam/global_features.json \
-  --device=cuda \
-  --output=run2_contact_diagnostics.json
-```
-
-The report includes component sizes, candidate counts, top-k occupancy, structural
-edge overlap, signed node gaps, analytic cylinder gaps, and graph-build time. It does
-not report precision or recall because the supplied VTP files contain no FE contact
-labels.
+Use `model.checkpoint_offloading=false` for an execution-only memory tradeoff.
+Use `model.enable_contact=false` to disable contact messages while retaining the
+contact parameters and initialization. The dedicated no-contact DeFormer
+experiment omits the contact module entirely. See
+[reference-geodesic exclusions](SURFACE_CONTACT_REFERENCE_GEODESIC.md) for filter,
+gap-floor, and cache options.
 
 ## Inference
 
@@ -407,7 +346,7 @@ falls outside the calibrated training envelope.  Warnings do not halt inference.
 
 ## Experiments
 
-Each experiment is a self-contained YAML file in `conf/`. Each config file includes all defaults and experiment-specific settings.
+Each YAML entry point in `conf/` selects shared component defaults and any experiment-specific overrides. The autoregressive comparison recipes inherit common settings rather than copying them.
 
 ### Anatomy of an experiment config
 
@@ -472,14 +411,9 @@ datapipe:
 | `crash_geotransolver_oneshot.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=crash_geotransolver_oneshot` |
 | `bumper_geoflare_oneshot.yaml` | Bumper beam (VTP) | GeoFLARE one-shot | `python train.py --config-name=bumper_geoflare_oneshot` |
 | `crash_geoflare_oneshot.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=crash_geoflare_oneshot` |
-| `bumper_meshtransolver_oneshot.yaml` | Bumper beam (VTP) | MeshTransolver one-shot | `python train.py --config-name=bumper_meshtransolver_oneshot` |
-| `bumper_meshgeotransolver_oneshot.yaml` | Bumper beam (VTP) | MeshGeoTransolver one-shot | `python train.py --config-name=bumper_meshgeotransolver_oneshot` |
-| `bumper_meshgeoflare_oneshot.yaml` | Bumper beam (VTP) | MeshGeoFLARE++ one-shot | `python train.py --config-name=bumper_meshgeoflare_oneshot` |
-| `bumper_meshgeoflare_autoregressive_teacher_forced.yaml` | Bumper beam (VTP) | MeshGeoFLARE++ teacher-forced rollout | `python train.py --config-name=bumper_meshgeoflare_autoregressive_teacher_forced` |
-| `bumper_meshgeoflarepp_pre_post_geometry_global_autoregressive_teacher_forced.yaml` | Bumper beam (VTP) | MeshGeoFLARE++ Pre+post+global teacher-forced rollout | `python train.py --config-name=bumper_meshgeoflarepp_pre_post_geometry_global_autoregressive_teacher_forced` |
-| `bumper_meshtransolver_autoregressive_contact.yaml` | Bumper beam (VTP) | MeshTransolver contact rollout | `python train.py --config-name=bumper_meshtransolver_autoregressive_contact` |
-| `bumper_meshgeotransolver_autoregressive_contact.yaml` | Bumper beam (VTP) | MeshGeoTransolver contact rollout | `python train.py --config-name=bumper_meshgeotransolver_autoregressive_contact` |
-| `bumper_meshgeoflare_autoregressive_contact.yaml` | Bumper beam (VTP) | MeshGeoFLARE++ contact rollout | `python train.py --config-name=bumper_meshgeoflare_autoregressive_contact` |
+| `crash_geoflare_autoregressive.yaml` | Full-car crash (VTP) | GeoFLARE BPTT-4 baseline | `python train.py --config-name=crash_geoflare_autoregressive` |
+| `crash_deformer_autoregressive.yaml` | Full-car crash (VTP) | DeFormer BPTT-4, no contact | `python train.py --config-name=crash_deformer_autoregressive` |
+| `crash_deformer_contact_autoregressive.yaml` | Full-car crash (VTP) | DeFormer BPTT-4, geodesic surface contact | `python train.py --config-name=crash_deformer_contact_autoregressive` |
 
 ### Choosing a time scheme
 
@@ -489,8 +423,7 @@ Three rollout schemes have premade experiment configurations:
 |--------|-------|------------------------|----------|
 | **One-shot** | `geotransolver_one_shot` | `all_time_steps` | One sample per run. Model predicts the full trajectory `[N, T-1, Fo]` from t0 in a single forward pass. Lower training cost, competitive accuracy. |
 | **Time-conditional** | `geotransolver_time_conditional` | `one_time_step` | One sample per run per timestep. Model predicts a single step `[N, Fo]` conditioned on normalized time `t/(T-1)`. Best accuracy for long horizons; higher training cost. Inference always rolls out the full trajectory. |
-| **Teacher-forced autoregressive** | `meshgeoflare_autoregressive_teacher_forced` | `all_time_steps` | Training supervises all transitions independently using ground-truth state history, so gradients do not propagate between time steps. Validation and inference feed predictions back through a 50-step closed-loop rollout. |
-| **Autoregressive contact** | `mesh*autoregressive_contact` | `all_time_steps` | Model predicts acceleration, integrates position and velocity, rebuilds contact from predicted geometry, and feeds the state back for every future step. |
+| **Autoregressive** | `geoflare_autoregressive` / `deformer_autoregressive` | `random_time_window` | Closed-loop BPTT during training; full-trajectory validation and inference. The contact experiment additionally rebuilds contact from predicted geometry. |
 
 Use **one-shot** when you need fast iteration or have limited compute. Use
 **time-conditional** when validation quality matters most. Use **autoregressive

@@ -257,7 +257,7 @@ def test_validation_config_copy_preserves_interpolations_and_train_settings():
 
     with initialize_config_dir(config_dir=str(CRASH_DIR / "conf"), version_base="1.3"):
         config = compose(
-            config_name="gm_crash_deformer_geodesic_gap5_surface_contact_autoregressive_tbptt",
+            config_name="crash_deformer_contact_autoregressive",
             overrides=[
                 "training.raw_data_dir=/train",
                 "training.raw_data_dir_validation=/val",

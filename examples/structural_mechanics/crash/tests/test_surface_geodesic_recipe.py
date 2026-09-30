@@ -26,27 +26,39 @@ from physicsnemo.nn.functional.neighbors.reference_geodesic import (  # noqa: E4
 def test_config_changes_only_static_exclusions():
     with initialize_config_dir(config_dir=str(CRASH_DIR / "conf"), version_base="1.3"):
         old = compose(
-            config_name="gm_crash_deformer_predictive_surface_contact_autoregressive_tbptt"
+            config_name="crash_deformer_contact_autoregressive",
+            overrides=[
+                "datapipe.contact_surface_exclusion=incidence",
+                "datapipe.contact_geodesic_gap_min=0.0",
+            ],
         )
         new = compose(
-            config_name="gm_crash_deformer_geodesic_surface_contact_autoregressive_tbptt"
+            config_name="crash_deformer_contact_autoregressive",
+            overrides=["datapipe.contact_geodesic_gap_min=0.0"],
         )
     assert old.model == new.model and old.training == new.training
     assert new.datapipe.contact_surface_exclusion == "reference_geodesic"
     assert new.datapipe.contact_geodesic_gap_min == 0.0
     previous = OmegaConf.to_container(old.datapipe, resolve=False)
     actual = OmegaConf.to_container(new.datapipe, resolve=False)
-    assert {key: actual[key] for key in previous} == previous
+    assert {
+        key: value
+        for key, value in actual.items()
+        if key != "contact_surface_exclusion"
+    } == {
+        key: value
+        for key, value in previous.items()
+        if key != "contact_surface_exclusion"
+    }
 
 
 def test_gap_floor_config_is_explicit_and_independent_of_message_band():
     with initialize_config_dir(config_dir=str(CRASH_DIR / "conf"), version_base="1.3"):
         old = compose(
-            config_name="gm_crash_deformer_geodesic_surface_contact_autoregressive_tbptt"
+            config_name="crash_deformer_contact_autoregressive",
+            overrides=["datapipe.contact_geodesic_gap_min=0.0"],
         )
-        new = compose(
-            config_name="gm_crash_deformer_geodesic_gap5_surface_contact_autoregressive_tbptt"
-        )
+        new = compose(config_name="crash_deformer_contact_autoregressive")
     assert new.model == old.model and new.training == old.training
     assert new.datapipe.contact_geodesic_gap_min == 5.0
     assert old.datapipe.contact_geodesic_gap_min == 0.0

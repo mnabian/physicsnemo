@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import torch
 from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
 from torch_geometric.data import Batch
 
 CRASH_DIR = Path(__file__).resolve().parents[1]
@@ -134,13 +135,19 @@ def test_real_surface_bptt_checkpoint_equivalence(
 def test_surface_recipe_preserves_training_budget():
     with initialize_config_dir(config_dir=str(CRASH_DIR / "conf"), version_base="1.3"):
         new = compose(
-            config_name="gm_crash_deformer_surface_contact_autoregressive_tbptt"
+            config_name="crash_deformer_contact_autoregressive",
+            overrides=[
+                "model.contact_surface_predictive=false",
+                "model.contact_surface_material_fan=false",
+            ],
         )
-        old = compose(config_name="gm_crash_deformer_contact_v2_autoregressive_tbptt")
-    assert new.training == old.training
+        old = compose(config_name="crash_deformer_autoregressive")
+    old_training = OmegaConf.to_container(old.training, resolve=False)
+    new_training = OmegaConf.to_container(new.training, resolve=False)
+    assert all(new_training[key] == value for key, value in old_training.items())
     assert new.model.attention_type == old.model.attention_type
     assert new.model.dt == old.model.dt
-    assert new.model.contact_dim == old.model.contact_dim == 12
+    assert new.model.contact_dim == 12
     assert new.model.mesh_hidden_dim == old.model.mesh_hidden_dim
     assert new.datapipe.contact_exclusion_hops is None
     assert new.datapipe.contact_surface
@@ -148,18 +155,20 @@ def test_surface_recipe_preserves_training_budget():
 
 def test_predictive_surface_recipe_preserves_architecture_and_budget():
     with initialize_config_dir(config_dir=str(CRASH_DIR / "conf"), version_base="1.3"):
-        new = compose(
-            config_name="gm_crash_deformer_predictive_surface_contact_autoregressive_tbptt"
-        )
+        new = compose(config_name="crash_deformer_contact_autoregressive")
         old = compose(
-            config_name="gm_crash_deformer_surface_contact_autoregressive_tbptt"
+            config_name="crash_deformer_contact_autoregressive",
+            overrides=[
+                "model.contact_surface_predictive=false",
+                "model.contact_surface_material_fan=false",
+            ],
         )
     assert new.training == old.training
     assert new.datapipe == old.datapipe
     assert new.model.contact_surface_predictive
     assert new.model.contact_surface_material_fan
     for key in old.model:
-        if key != "contact_surface_max_pairs":
+        if key not in {"contact_surface_predictive", "contact_surface_material_fan"}:
             assert new.model[key] == old.model[key]
     for backend in ("legacy", "nearest_k"):
         with pytest.raises(ValueError, match="requires the surface backend"):

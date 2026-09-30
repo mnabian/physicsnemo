@@ -283,27 +283,18 @@ def test_memory_options_preserve_bptt_values_and_gradients(
 
 
 @pytest.mark.parametrize("offload", [False, True])
-def test_memory_configs_only_change_execution_options(offload):
-    variant = "offloaded" if offload else "checkpointed"
+def test_memory_overrides_only_change_execution_options(offload):
+    """Memory tradeoffs are overrides, not separate experiment files."""
     with initialize_config_dir(version_base=None, config_dir=str(CRASH_DIR / "conf")):
-        base = compose(
-            config_name="gm_crash_deformer_contact_kinematic_autoregressive_tbptt"
-        )
+        base = compose(config_name="crash_deformer_contact_autoregressive")
         config = compose(
-            config_name=f"gm_crash_deformer_contact_{variant}_autoregressive_tbptt"
+            config_name="crash_deformer_contact_autoregressive",
+            overrides=[f"model.checkpoint_offloading={str(offload).lower()}"],
         )
     actual = OmegaConf.to_container(config, resolve=False)
     expected = OmegaConf.to_container(base, resolve=False)
-    for name in (
-        "checkpoint_contact",
-        "num_pre_processor_checkpoint_segments",
-        "num_post_processor_checkpoint_segments",
-        "checkpoint_offloading",
-    ):
-        actual["model"].pop(name, None)
-        expected["model"].pop(name, None)
-    actual.pop("experiment_name")
-    expected.pop("experiment_name")
+    actual["model"].pop("checkpoint_offloading")
+    expected["model"].pop("checkpoint_offloading")
     assert actual == expected
     assert config.model.checkpoint_contact
     assert config.model.num_pre_processor_checkpoint_segments == 2
@@ -370,30 +361,21 @@ def test_stationary_cylinder_kinematics_and_smooth_weights():
     assert positions.grad.abs().sum() > 0 and velocities.grad.abs().sum() > 0
 
 
-@pytest.mark.parametrize("dataset", ["gm_crash", "bumper"])
-@pytest.mark.parametrize("kinematic", [False, True])
-def test_contact_configs_preserve_baseline_recipe(dataset, kinematic):
-    suffix = "_autoregressive_tbptt" if dataset == "gm_crash" else "_autoregressive"
-    base_name = (
-        "gm_crash_deformer_autoregressive_tbptt"
-        if dataset == "gm_crash"
-        else "bumper_meshgeoflare_adapter_flare_autoregressive"
-    )
-    name = dataset + "_deformer_contact" + ("_kinematic" if kinematic else "") + suffix
+def test_contact_disable_override_preserves_model_and_training():
+    """Disabling messages alone keeps the contact module for a paired ablation."""
     with initialize_config_dir(version_base=None, config_dir=str(CRASH_DIR / "conf")):
-        base = compose(config_name=base_name)
-        config = compose(config_name=name)
-    for key in ("training", "datapipe", "inference"):
-        assert OmegaConf.to_container(
-            config[key], resolve=False
-        ) == OmegaConf.to_container(base[key], resolve=False)
-    assert config.model.attention_type == "GALE_FA"
-    assert config.model.contact_graph_backend == "nearest_k"
-    assert config.model.contact_dim == (12 if kinematic else 8)
-    assert config.model.contact_include_velocity == kinematic
-    assert config.model.contact_smooth_cutoff == kinematic
-    assert config.model.teacher_forcing is False
-    assert config.model.enable_cylinder_contact == (dataset == "bumper")
+        enabled = compose(config_name="crash_deformer_contact_autoregressive")
+        disabled = compose(
+            config_name="crash_deformer_contact_autoregressive",
+            overrides=["model.enable_contact=false"],
+        )
+    assert disabled.model.use_contact
+    assert not disabled.model.enable_contact
+    actual = OmegaConf.to_container(disabled, resolve=False)
+    expected = OmegaConf.to_container(enabled, resolve=False)
+    actual["model"].pop("enable_contact")
+    expected["model"].pop("enable_contact")
+    assert actual == expected
 
 
 @pytest.mark.parametrize(

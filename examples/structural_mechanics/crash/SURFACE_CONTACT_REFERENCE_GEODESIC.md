@@ -20,21 +20,22 @@ materially distant region remains eligible. This is a graph-edge approximation
 to reference-surface geodesics; it can overestimate continuous-surface distances
 and consequently retain pairs that a continuous-distance filter would exclude.
 
-The method is inspired by Radioss TYPE7 `Irem_gap=2`, remark 14:
-https://help.altair.com/hwsolvers/rad/topics/solvers/rad/inter_type7_starter_r.htm
+The method is inspired by Radioss TYPE7 `Irem_gap=2`, remark 14 in the
+[TYPE7 reference](https://help.altair.com/hwsolvers/rad/topics/solvers/rad/inter_type7_starter_r.htm).
 It is **not** exact solver replication: we lack the deck, facet/part contact
 sets, element thickness metadata and solver gap options. Maximum facet-vertex
 thickness is an explicit nodal-data approximation. Mesh-size gap corrections,
 tied-contact exclusions, adaptive erosion and friction are not added here.
 
-Configurations:
+The `crash_deformer_contact_autoregressive` entry point uses an explicit 5 mm
+gap floor. This is a modeling assumption, not an assertion about the dataset's
+solver. It leaves the independent message-activation band unchanged.
+Use overrides on that entry point for controlled ablations:
 
-- `gm_crash_deformer_geodesic_surface_contact_autoregressive_tbptt`: zero floor,
-  thickness-based gap only.
-- `gm_crash_deformer_geodesic_gap5_surface_contact_autoregressive_tbptt`: explicit
-  5 mm gap floor. This is a separate modeling assumption, not an assertion about
-  the dataset's solver. It leaves the independent message activation band alone.
+- `datapipe.contact_geodesic_gap_min=0.0`: thickness-based gap only.
 - `datapipe.contact_surface_exclusion=incidence`: omit the optional filter.
+- `datapipe.contact_surface_exclusion=one_ring`: exclude queries sharing a
+  perimeter mesh edge with any vertex of the face, in addition to incidence.
 - `datapipe.contact_geodesic_distance_scale=0`: return incidence exclusions only.
 
 The datapipe copies initial coordinates **before normalization**, and stores
@@ -70,6 +71,6 @@ raises instead of truncating. Tests compare against an independent tiny dense
 Floyd-Warshall oracle, check strict thresholds and disconnected/folded meshes,
 validate physical-coordinate caching, and check checkpointed BPTT gradients.
 
-On the first inspected GM case (Run100), thickness-only preprocessing returned
-exactly the incidence set. Do not claim a meaningful distinct training ablation
-unless an observed-geometry audit demonstrates additional eligible-pair removal.
+Thickness-only preprocessing may return exactly the incidence set on coarse
+meshes. Audit observed-geometry exclusions before treating a changed filter
+setting as a distinct contact graph.

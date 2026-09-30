@@ -14,52 +14,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Bumper beam crash experiment using FLARE++ plus mesh message passing (one-shot).
-
-# @package _global_
+# Point-cloud baseline for full-trajectory crash prediction with FLARE attention.
 hydra:
   job:
-    chdir: True
+    chdir: true
   run:
     dir: ./outputs/
 
-experiment_name: "Bumper-MeshGeoFLARE++"
+experiment_name: Crash-GeoFLARE-Autoregressive
 
 defaults:
   - reader: vtp
-  - datapipe: graph
-  - model: meshgeoflare_one_shot
+  - datapipe: point_cloud
+  - model: geoflare_autoregressive
   - training: default
   - inference: default
   - _self_
 
-# The training recipe intentionally matches bumper_geoflare_oneshot.yaml.
 training:
   raw_data_dir: ???
   raw_data_dir_validation: ???
-  global_features_filepath: ???
+  global_features_filepath: null
   optimizer: muon
-  num_time_steps: 51
-  num_training_samples: 121
-  num_validation_samples: 5
+  amp: true
+  amp_dtype: bfloat16
+  manual_gradient_allreduce: true
+  seed: 42
+  num_time_steps: 26
+  num_training_samples: 127
+  num_validation_samples: 8
+  epochs: 500
+  start_lr: 2.0e-4
+  end_lr: 1.0e-6
+  validation_freq: 50
+  save_checkpoint_freq: 10
+  early_stopping_patience: 0
+  acceleration_loss_weight: 0.0
 
 inference:
   raw_data_dir_test: ???
 
 datapipe:
-  static_features: []
-  dynamic_targets:
-    - effective_plastic_strain
-    - stress_vm
-  global_features:
-    - velocity_x
-    - thickness_scale
-    - rwall_origin_y
-  sample_type: all_time_steps
-
-model:
-  functional_dim: 3
-  out_dim: 250
-  global_dim: 3
-  attention_type: "GALE_FPP"
-  attn_scale: null
+  static_features: [thickness]
+  dynamic_targets: []
+  global_features: null
+  # Two observed frames initialize velocity; training rolls four transitions.
+  # Validation and inference use every remaining transition in the trajectory.
+  sample_type: random_time_window
+  initial_history_steps: 2
+  rollout_window_steps: 4
+  windows_per_sample: 1

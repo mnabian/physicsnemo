@@ -198,12 +198,15 @@ def test_one_ring_bptt_checkpoint_equivalence(device, implementation):
 def test_ablation_changes_only_exclusions():
     with initialize_config_dir(config_dir=str(CRASH_DIR / "conf"), version_base="1.3"):
         new = compose(
-            config_name="gm_crash_deformer_one_ring_surface_contact_autoregressive_tbptt"
+            config_name="crash_deformer_contact_autoregressive",
+            overrides=["datapipe.contact_surface_exclusion=one_ring"],
         )
         old = compose(
-            config_name="gm_crash_deformer_predictive_surface_contact_autoregressive_tbptt"
+            config_name="crash_deformer_contact_autoregressive",
+            overrides=["datapipe.contact_surface_exclusion=incidence"],
         )
     assert new.model == old.model and new.training == old.training
     assert new.datapipe.contact_surface_exclusion == "one_ring"
     del new.datapipe.contact_surface_exclusion
+    del old.datapipe.contact_surface_exclusion
     assert new.datapipe == old.datapipe

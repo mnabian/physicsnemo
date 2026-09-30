@@ -23,8 +23,7 @@ after two observed frames. Node inputs are velocity and thickness, with position
 used by the geometry and contact pathways. This is not the newer position-input,
 latent-attention, or increasing-window curriculum ablation.
 
-See [surface-contact methodology](../../../SURFACE_CONTACT.md) and
-[reference-geodesic exclusions](SURFACE_CONTACT_REFERENCE_GEODESIC.md).
+See [reference-geodesic exclusions](SURFACE_CONTACT_REFERENCE_GEODESIC.md).
 The 5 mm geodesic gap floor is an explicit modeling assumption, separate from
 the message-activation band, not a recovered solver-deck setting. Dataset paths
 and splits must be supplied by the user; no proprietary datasets or trained

@@ -25,7 +25,7 @@ import torch
 from jaxtyping import Bool, Float
 from tensordict import TensorDict, tensorclass
 
-from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
+from physicsnemo.mesh.mesh import Mesh, _requested_dtype
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 
@@ -44,7 +44,8 @@ class DomainMesh:
     ``"inlet"``, ``"farfield"``), plus optional domain-level metadata in
     ``global_data``.
 
-    ``DomainMesh`` exposes sparse world-space :meth:`morph` and lattice
+    ``DomainMesh`` exposes sparse world-space :meth:`morph`, global
+    :meth:`radial_basis_function_deform`, and lattice
     :meth:`free_form_deform`, but no dense ``displace``. Component point counts
     and fields can differ. One shared control field transfers consistently
     across every component.
@@ -187,8 +188,8 @@ class DomainMesh:
         self,
         fn: Callable[[Mesh], Mesh],
         *,
-        interior: bool = True,
-        boundaries: bool = True,
+        interior: builtins.bool = True,
+        boundaries: builtins.bool = True,
     ) -> "DomainMesh":
         r"""Apply a Mesh-to-Mesh function to meshes in the domain.
 
@@ -273,6 +274,13 @@ class DomainMesh:
             DomainMesh
                 A new DomainMesh on the target device/dtype, or the same
                 instance if no changes were required.
+
+            Raises
+            ------
+            TypeError
+                If ``dtype`` is neither floating-point nor complex. Coordinates
+                must stay real- or complex-valued, and the cast would also be
+                applied to each component mesh's integer ``cells``.
 
             Examples
             --------
@@ -377,7 +385,7 @@ class DomainMesh:
 
     def translate(
         self,
-        offset: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float],
+        offset: Float[torch.Tensor, " n_spatial_dims"] | Sequence[builtins.float],
     ) -> "DomainMesh":
         r"""Translate all meshes in the domain by a constant offset.
 
@@ -398,15 +406,17 @@ class DomainMesh:
 
     def rotate(
         self,
-        angle: float,
+        angle: builtins.float,
         axis: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[float]
+        | Sequence[builtins.float]
         | Literal["x", "y", "z"]
         | None = None,
-        center: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
+        center: Float[torch.Tensor, " n_spatial_dims"]
+        | Sequence[builtins.float]
+        | None = None,
+        transform_point_data: builtins.bool | TensorDict = False,
+        transform_cell_data: builtins.bool | TensorDict = False,
+        transform_global_data: builtins.bool | TensorDict = False,
     ) -> "DomainMesh":
         r"""Rotate all meshes in the domain about an axis.
 
@@ -476,12 +486,14 @@ class DomainMesh:
 
     def scale(
         self,
-        factor: float | Float[torch.Tensor, " n_spatial_dims"],
-        center: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
-        assume_invertible: bool | None = None,
+        factor: builtins.float | Float[torch.Tensor, " n_spatial_dims"],
+        center: Float[torch.Tensor, " n_spatial_dims"]
+        | Sequence[builtins.float]
+        | None = None,
+        transform_point_data: builtins.bool | TensorDict = False,
+        transform_cell_data: builtins.bool | TensorDict = False,
+        transform_global_data: builtins.bool | TensorDict = False,
+        assume_invertible: builtins.bool | None = None,
     ) -> "DomainMesh":
         r"""Scale all meshes in the domain by specified factor(s).
 
@@ -550,10 +562,10 @@ class DomainMesh:
     def transform(
         self,
         matrix: Float[torch.Tensor, "new_n_spatial_dims n_spatial_dims"],
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
-        assume_invertible: bool | None = None,
+        transform_point_data: builtins.bool | TensorDict = False,
+        transform_cell_data: builtins.bool | TensorDict = False,
+        transform_global_data: builtins.bool | TensorDict = False,
+        assume_invertible: builtins.bool | None = None,
     ) -> "DomainMesh":
         r"""Apply a linear transformation to all meshes in the domain.
 
@@ -714,6 +726,147 @@ class DomainMesh:
                 radius=radius,
                 point_weights=combined_point_weights,
                 kernel=kernel,
+                implementation=implementation,
+            )
+
+        return self._deform_components(components, resolved_point_weights, apply_field)
+
+    def radial_basis_function_deform(
+        self,
+        control_points: Float[torch.Tensor, "n_controls n_spatial_dims"],
+        control_displacements: Float[torch.Tensor, "n_controls n_spatial_dims"],
+        *,
+        kernel: Literal["thin_plate_spline"] = "thin_plate_spline",
+        polynomial: builtins.bool = True,
+        smoothing: builtins.float = 0.0,
+        point_weights: str | tuple[str, ...] | None = None,
+        implementation: Literal["torch", "warp"] | None = None,
+    ) -> "DomainMesh":
+        """Deform every component with one global thin-plate-spline RBF field.
+
+        The same controls, fitted coefficients, kernel, and evaluation backend
+        are shared across the interior and every boundary. With no point
+        weights, coincident component points therefore receive identical
+        motion. When supplied, ``point_weights`` is a common
+        :attr:`Mesh.point_data` key (or nested tuple key) resolved independently
+        on each component. Each resolved weight scales the fitted field at its
+        point. Coincident component points therefore receive identical motion
+        only when their resolved weights match. Raw weight tensors are rejected
+        because component point counts differ.
+
+        Parameters
+        ----------
+        control_points : torch.Tensor
+            World-coordinate controls with shape
+            ``(n_controls, n_spatial_dims)`` and the same float32 or float64
+            dtype and device as every component's points.
+        control_displacements : torch.Tensor
+            Displacement vectors, not destination coordinates, with the same
+            shape, dtype, and device as ``control_points``.
+        kernel : {"thin_plate_spline"}, optional
+            Radial kernel used by the interpolant. Default is
+            ``"thin_plate_spline"``.
+        polynomial : bool, optional
+            Add the standard affine polynomial tail and side constraints. When
+            controls are present, this requires at least ``D + 1`` distinct
+            controls that span the ambient affine basis and form a nonsingular
+            augmented system. Default is ``True``.
+        smoothing : float, optional
+            Nonnegative diagonal regularization. With a nonsingular control
+            layout, zero interpolates the control displacements up to solver
+            precision. Positive values relax interpolation accuracy. Default is
+            ``0.0``.
+        point_weights : str, tuple[str, ...], or None
+            Optional point-data key present in every component. Resolved tensors
+            must use one common bool or floating dtype. Floating weights must
+            match component point dtypes. Every resolved tensor must be on the
+            same device as its component's points. Raw tensors are not
+            accepted.
+        implementation : {"torch", "warp"} or None
+            Field-evaluation backend. Both paths use PyTorch for the coefficient
+            solve. Automatic dispatch uses Torch on CPU. On CUDA, it uses Warp
+            when available and otherwise Torch.
+
+        Returns
+        -------
+        DomainMesh
+            New domain with deformed component meshes and unchanged domain data.
+
+        Raises
+        ------
+        TypeError
+            If control tensors or Python arguments have unsupported types, or
+            if tensor dtypes are unsupported or mismatched.
+        ValueError
+            If component data, tensor shapes, devices, control layout, point
+            weights, or RBF options are invalid.
+        KeyError
+            If a point-data key is missing or ``implementation`` does not name
+            a registered backend.
+        ImportError
+            If an explicitly requested backend is unavailable.
+        RuntimeError
+            If runtime validation or coefficient fitting fails, including for
+            a singular system or during CUDA Graph capture.
+
+        Notes
+        -----
+        The thin-plate-spline field has global support. Connectivity and
+        attached mesh and domain data are retained. Attached vector and tensor
+        fields are treated as Lagrangian data and are not pushed forward.
+        Geometry caches are invalidated and topology caches are retained on each
+        component. The operation does not detect inverted, degenerate, or
+        self-intersecting cells. Use each component mesh's
+        :meth:`Mesh.validate` method explicitly when required. Coefficient
+        fitting is not supported inside CUDA Graph capture because the
+        singular-system check requires host interaction.
+        """
+        if not isinstance(control_points, torch.Tensor):
+            raise TypeError(
+                "control_points must be a torch.Tensor, got "
+                f"{type(control_points).__name__}"
+            )
+        if not isinstance(control_displacements, torch.Tensor):
+            raise TypeError(
+                "control_displacements must be a torch.Tensor, got "
+                f"{type(control_displacements).__name__}"
+            )
+        if point_weights is not None and not isinstance(point_weights, (str, tuple)):
+            raise TypeError(
+                "DomainMesh.radial_basis_function_deform point_weights must be "
+                "a common point_data key/path, not a raw tensor"
+            )
+
+        from physicsnemo.mesh.transformations.deform._utils import (
+            _resolve_domain_point_weights,
+        )
+        from physicsnemo.nn.functional.geometry.deform import (
+            radial_basis_function_deform_points,
+        )
+
+        components: list[tuple[str, Mesh]] = [("interior", self.interior)]
+        components.extend(
+            (f"boundaries[{name!r}]", self.boundaries[name])
+            for name in self.boundaries.keys()
+        )
+        resolved_point_weights = _resolve_domain_point_weights(
+            components, point_weights, control_points, "control_points"
+        )
+
+        def apply_field(
+            combined_points: Float[torch.Tensor, "n_points n_spatial_dims"],
+            combined_point_weights: Bool[torch.Tensor, " n_points"]
+            | Float[torch.Tensor, " n_points"]
+            | None,
+        ) -> Float[torch.Tensor, "n_points n_spatial_dims"]:
+            return radial_basis_function_deform_points(
+                combined_points,
+                control_points,
+                control_displacements,
+                kernel=kernel,
+                polynomial=polynomial,
+                smoothing=smoothing,
+                point_weights=combined_point_weights,
                 implementation=implementation,
             )
 
@@ -909,10 +1062,6 @@ class DomainMesh:
                 torch.cat(resolved_point_weights, dim=0) if has_point_weights else None
             )
 
-        from physicsnemo.mesh.transformations.deform._utils import (
-            _mesh_with_deformed_points,
-        )
-
         combined_output = apply_field(combined_points, combined_point_weights)
         output_points = (
             (combined_output,)
@@ -920,7 +1069,7 @@ class DomainMesh:
             else combined_output.split(point_counts, dim=0)
         )
         output_meshes = [
-            _mesh_with_deformed_points(component, points)
+            component.with_points(points)
             for component, points in zip(component_meshes, output_points)
         ]
 
@@ -939,10 +1088,10 @@ class DomainMesh:
 
     def clean(
         self,
-        tolerance: float = 1e-12,
-        merge_points: bool = True,
-        remove_duplicate_cells: bool = True,
-        remove_unused_points: bool = True,
+        tolerance: builtins.float = 1e-12,
+        merge_points: builtins.bool = True,
+        remove_duplicate_cells: builtins.bool = True,
+        remove_unused_points: builtins.bool = True,
     ) -> "DomainMesh":
         r"""Clean and repair all meshes in the domain.
 
@@ -973,21 +1122,30 @@ class DomainMesh:
             )
         )
 
-    def strip_caches(self) -> "DomainMesh":
+    def strip_caches(
+        self,
+        keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] = (),
+    ) -> "DomainMesh":
         r"""Remove cached geometry from all meshes in the domain.
 
         Delegates to :meth:`Mesh.strip_caches` for each mesh.
 
+        Parameters
+        ----------
+        keep : str, tuple[str, ...], or sequence of either, optional
+            Cache keys to retain on every component mesh. See
+            :meth:`Mesh.strip_caches` for key semantics.
+
         Returns
         -------
         DomainMesh
-            New domain with all cached values cleared.
+            New domain retaining only the requested cached values on each mesh.
         """
-        return self.apply_to_meshes(lambda m: m.strip_caches())
+        return self.apply_to_meshes(lambda m: m.strip_caches(keep=keep))
 
     def subdivide(
         self,
-        levels: int = 1,
+        levels: builtins.int = 1,
         filter: Literal["linear", "butterfly", "loop"] = "linear",
     ) -> "DomainMesh":
         r"""Subdivide all meshes in the domain.
@@ -1010,7 +1168,9 @@ class DomainMesh:
 
     ### Data Operations
 
-    def cell_data_to_point_data(self, overwrite_keys: bool = False) -> "DomainMesh":
+    def cell_data_to_point_data(
+        self, overwrite_keys: builtins.bool = False
+    ) -> "DomainMesh":
         r"""Convert cell data to point data on all meshes in the domain.
 
         Delegates to :meth:`Mesh.cell_data_to_point_data` for each mesh.
@@ -1029,7 +1189,9 @@ class DomainMesh:
             lambda m: m.cell_data_to_point_data(overwrite_keys=overwrite_keys)
         )
 
-    def point_data_to_cell_data(self, overwrite_keys: bool = False) -> "DomainMesh":
+    def point_data_to_cell_data(
+        self, overwrite_keys: builtins.bool = False
+    ) -> "DomainMesh":
         r"""Convert point data to cell data on all meshes in the domain.
 
         Delegates to :meth:`Mesh.point_data_to_cell_data` for each mesh.
@@ -1112,13 +1274,15 @@ class DomainMesh:
 
     def validate(
         self,
-        check_degenerate_cells: bool = True,
-        check_duplicate_vertices: bool = True,
-        check_inverted_cells: bool = False,
-        check_out_of_bounds: bool = True,
-        check_manifoldness: bool = False,
-        tolerance: float = 1e-10,
-        raise_on_error: bool = False,
+        check_degenerate_cells: builtins.bool = True,
+        check_duplicate_vertices: builtins.bool = True,
+        check_inverted_cells: builtins.bool = False,
+        check_out_of_bounds: builtins.bool = True,
+        check_manifoldness: builtins.bool = False,
+        tolerance: builtins.float | None = None,
+        raise_on_error: builtins.bool = False,
+        *,
+        check_self_intersection: builtins.bool = False,
     ) -> dict[str, Any]:
         r"""Validate all meshes in the domain and aggregate results.
 
@@ -1137,10 +1301,15 @@ class DomainMesh:
             Check cell indices are valid.
         check_manifoldness : bool, optional
             Check manifold topology.
-        tolerance : float, optional
-            Tolerance for geometric checks.
+        tolerance : float | None, optional
+            Tolerance for geometric checks. If ``None`` (default), each mesh
+            uses a dtype-aware epsilon.
         raise_on_error : bool, optional
             Raise ``ValueError`` on first error vs return report.
+        check_self_intersection : bool, optional
+            Request self-intersection checks for every component. This option
+            is keyword-only and not yet implemented; passing ``True`` raises
+            ``NotImplementedError``.
 
         Returns
         -------
@@ -1153,6 +1322,12 @@ class DomainMesh:
             - ``"boundaries"``: ``dict[str, Mapping[str, ...]]`` of per-boundary
               reports.
             - ``"valid"``: ``bool``, ``True`` only if all meshes pass validation.
+
+        Raises
+        ------
+        NotImplementedError
+            If ``check_self_intersection=True`` because component-level
+            self-intersection checking is not yet implemented.
         """
         kwargs: dict[str, Any] = dict(
             check_degenerate_cells=check_degenerate_cells,
@@ -1160,6 +1335,7 @@ class DomainMesh:
             check_inverted_cells=check_inverted_cells,
             check_out_of_bounds=check_out_of_bounds,
             check_manifoldness=check_manifoldness,
+            check_self_intersection=check_self_intersection,
             tolerance=tolerance,
             raise_on_error=raise_on_error,
         )
@@ -1189,7 +1365,7 @@ class DomainMesh:
         return sorted(self.boundaries.keys())
 
     @property
-    def n_boundaries(self) -> int:
+    def n_boundaries(self) -> builtins.int:
         """Number of boundary meshes.
 
         Returns
@@ -1243,7 +1419,7 @@ class DomainMesh:
         """
         yield from self.all_meshes()
 
-    def merge_boundaries(self, preserve_data: bool = False) -> Mesh:
+    def merge_boundaries(self, preserve_data: builtins.bool = False) -> Mesh:
         """Merge all boundary meshes into a single :class:`Mesh`.
 
         Produces a mesh containing the concatenated points and cells from
@@ -1286,7 +1462,7 @@ class DomainMesh:
         geometry_only = [Mesh(points=b.points, cells=b.cells) for b in boundaries]
         return Mesh.merge(geometry_only)
 
-    def is_boundary_watertight(self, tolerance: float = 1e-6) -> bool:
+    def is_boundary_watertight(self, tolerance: builtins.float = 1e-6) -> builtins.bool:
         r"""Check whether the merged boundary meshes form a watertight surface.
 
         Merges all boundary meshes via :meth:`merge_boundaries`, deduplicates
@@ -1329,16 +1505,16 @@ class DomainMesh:
         self,
         *,
         backend: Literal["matplotlib", "pyvista", "auto"] = "auto",
-        show: bool = True,
+        show: builtins.bool = True,
         point_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
         cell_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
         cmap: str = "viridis",
-        vmin: float | None = None,
-        vmax: float | None = None,
-        alpha_points: float = 1.0,
-        alpha_cells: float = 1.0,
-        alpha_edges: float = 1.0,
-        show_edges: bool = False,
+        vmin: builtins.float | None = None,
+        vmax: builtins.float | None = None,
+        alpha_points: builtins.float = 1.0,
+        alpha_cells: builtins.float = 1.0,
+        alpha_edges: builtins.float = 1.0,
+        show_edges: builtins.bool = False,
         boundary_kwargs: dict[str, Any] | None = None,
         ax: "matplotlib.axes.Axes | pyvista.Plotter | None" = None,
         backend_options: dict[str, Any] | None = None,
@@ -1488,10 +1664,13 @@ def _domain_mesh_repr(self: DomainMesh) -> str:
             lines.append(f"        {name.ljust(max_bc_len)}: {first}")
             lines.extend(f"        {line}" for line in rest)
 
-    ### Global data (only if non-empty)
-    gd_keys = sorted(self.global_data.keys())
-    if gd_keys:
-        items = ", ".join(f"{k}: {tuple(self.global_data[k].shape)}" for k in gd_keys)
+    ### Global data (only if non-empty); nested leaves print as "a.b: shape"
+    gd_items = sorted(
+        (".".join(k) if isinstance(k, tuple) else k, tuple(v.shape))
+        for k, v in self.global_data.items(include_nested=True, leaves_only=True)
+    )
+    if gd_items:
+        items = ", ".join(f"{k}: {shape}" for k, shape in gd_items)
         lines.append(f"    global_data: {{{items}}}")
 
     lines.append(")")
@@ -1504,12 +1683,18 @@ DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore[method-assign]  # ty: ig
 ### Override the tensorclass ``to`` for the same reason as ``Mesh.to``: a floating/
 # complex dtype cast via the generated tensorclass ``to`` recurses into the interior/
 # boundary meshes and casts their integer ``cells`` to a float dtype, which fails
-# ``Mesh.__post_init__``. Only an explicitly requested floating dtype takes the
+# ``Mesh.__post_init__``. Only an explicitly requested floating/complex dtype takes the
 # per-mesh path through the (cells-safe) ``Mesh.to`` via ``apply_to_meshes`` (with
-# ``global_data`` cast too); device-only moves and non-float dtypes are delegated
-# unchanged (cells-safe and metadata-preserving).
+# ``global_data`` cast too). Device-only moves are delegated unchanged.
 def _domain_mesh_to(self, *args: Any, **kwargs: Any) -> "DomainMesh":
-    cast_dtype = _requested_float_dtype(args, kwargs)
+    cast_dtype = _requested_dtype(args, kwargs)
+    if cast_dtype is not None and not (
+        cast_dtype.is_floating_point or cast_dtype.is_complex
+    ):
+        raise TypeError(
+            "Mesh coordinates must remain floating point or complex; "
+            f"cannot convert a DomainMesh to {cast_dtype}."
+        )
     if cast_dtype is None:
         return _tensorclass_domain_to(self, *args, **kwargs)
 

@@ -23,14 +23,10 @@ from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.geotransolver import (
-    GALE_block,
-    GeoTransolver,
-    GlobalContextBuilder,
-)
+from physicsnemo.models.geotransolver import GeoTransolver, GlobalContextBuilder
 from physicsnemo.models.meshgraphnet.meshgraphnet import MeshGraphNetProcessor
 from physicsnemo.models.transolver.transolver import TransolverBlock
-from physicsnemo.nn import get_activation
+from physicsnemo.nn import GALEBlock, get_activation
 from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
 from physicsnemo.nn.module.gnn_layers.utils import GraphType
 
@@ -437,7 +433,7 @@ class MeshAttentionHybrid(Module):
             context_dim = self.context_builder.get_context_dim()
             self.attention_blocks = nn.ModuleList(
                 [
-                    GALE_block(
+                    GALEBlock(
                         num_heads=num_heads,
                         hidden_dim=hidden_dim,
                         dropout=dropout,
@@ -818,6 +814,9 @@ class MeshGeoFLARE(GeoTransolver):
         hidden_dim: int | None = None,
         num_heads: int | None = None,
         num_attention_layers: int | None = None,
+        activation_checkpointing: bool = False,
+        checkpointing_ratio: float = 1.0,
+        activation_checkpointing_components: tuple[str, ...] | list[str] = ("blocks",),
     ) -> None:
         functional_dim = self._resolve_alias(
             functional_dim, input_dim_nodes, "functional_dim", "input_dim_nodes"
@@ -868,6 +867,11 @@ class MeshGeoFLARE(GeoTransolver):
         if mesh_context_use_global and global_dim is None:
             raise ValueError("global_dim is required for global mesh-context fusion")
 
+        if guard_config is not None:
+            raise ValueError(
+                "Embedded guard_config is no longer supported. Use the external "
+                "GeoTransolver OOD guard API to attach a guard to this model."
+            )
         super().__init__(
             functional_dim=functional_dim,
             out_dim=out_dim,
@@ -887,11 +891,13 @@ class MeshGeoFLARE(GeoTransolver):
             radii=radii,
             neighbors_in_radius=neighbors_in_radius,
             n_hidden_local=n_hidden_local,
-            guard_config=guard_config,
             attention_type=attention_type,
             concrete_dropout=concrete_dropout,
             state_mixing_mode=state_mixing_mode,
             attn_scale=attn_scale,
+            activation_checkpointing=activation_checkpointing,
+            checkpointing_ratio=checkpointing_ratio,
+            activation_checkpointing_components=activation_checkpointing_components,
         )
         self.__name__ = "MeshGeoFLARE"
 
@@ -1149,12 +1155,14 @@ class MeshGeoFLARE(GeoTransolver):
                 else global_embedding[graph_idx : graph_idx + 1]
             )
             local_i = node_features.index_select(0, node_index).unsqueeze(0)
-            context_state = self.context_builder.build_context(
+            context_state = self._run_checkpointed_component(
+                "context",
+                self.context_builder.build_context,
                 (local_i,),
                 None if positions_i is None else (positions_i,),
                 geometry_i,
                 global_i,
-                detach_geometry_context=self.mesh_context_encoder is None,
+                self.mesh_context_encoder is None,
             )
             if self.mesh_context_encoder is not None:
                 if context_state[2] is None:
@@ -1180,7 +1188,9 @@ class MeshGeoFLARE(GeoTransolver):
             )
 
         edge_latent = self.edge_encoder(edge_features)
-        backbone_latent = self.preprocess[0](node_features)
+        backbone_latent = self._run_checkpointed_component(
+            "preprocess", self.preprocess[0], node_features
+        )
         pre_seed = self.pre_latent_input(backbone_latent)
         pre_latent = pre_seed
         if self.pre_context_film is not None:
@@ -1232,8 +1242,7 @@ class MeshGeoFLARE(GeoTransolver):
             global_i,
             context_state,
         ) in per_graph_inputs:
-            embedding_states, local_features, geometry_context = context_state
-            self._apply_ood_guard(global_i, geometry_context)
+            embedding_states, local_features, _ = context_state
             output_i = self._process_preprocessed_embeddings(
                 [mesh_latent.index_select(0, node_index).unsqueeze(0)],
                 embedding_states,

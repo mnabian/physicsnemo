@@ -18,7 +18,9 @@ in the documentation for performance comparisons.
    :caption: PhysicsNeMo Functionals
    :name: PhysicsNeMo Functionals
 
+   nn/functionals/sampling
    nn/functionals/neighbors
+   nn/functionals/normalization
    nn/functionals/derivatives
    nn/functionals/geometry
    nn/functionals/fourier_spectral

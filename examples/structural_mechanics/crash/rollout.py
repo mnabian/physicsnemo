@@ -22,7 +22,6 @@ from contact_graph import BumperCylinderContactEncoder
 from datapipe import SimSample
 from torch.utils.checkpoint import checkpoint as ckpt
 
-from physicsnemo.experimental.models.geotransolver import GeoTransolver
 from physicsnemo.experimental.models.meshtransolver import (
     CONTACT_FEATURE_DIM,
     KINEMATIC_CONTACT_FEATURE_DIM,
@@ -37,6 +36,7 @@ from physicsnemo.experimental.models.meshtransolver import (
     merge_contact_graphs,
 )
 from physicsnemo.models.figconvnet.figconvunet import FIGConvUNet
+from physicsnemo.models.geotransolver import GeoTransolver
 from physicsnemo.models.meshgraphnet import MeshGraphNet
 from physicsnemo.models.transolver import Transolver
 
@@ -424,7 +424,9 @@ class _MeshAttentionAutoregressiveMixin:
             )
         elif contact_graph_backend == "nearest_k":
             if contact_surface_predictive:
-                raise ValueError("predictive surface contact requires the surface backend")
+                raise ValueError(
+                    "predictive surface contact requires the surface backend"
+                )
             if exclude_same_component:
                 raise ValueError(
                     "nearest_k contact allows self-contact within a component; use explicit topology exclusions instead"
@@ -443,7 +445,9 @@ class _MeshAttentionAutoregressiveMixin:
             )
         elif contact_graph_backend == "legacy":
             if contact_surface_predictive:
-                raise ValueError("predictive surface contact requires the surface backend")
+                raise ValueError(
+                    "predictive surface contact requires the surface backend"
+                )
             if (
                 contact_include_velocity
                 or contact_smooth_cutoff

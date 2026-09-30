@@ -20,10 +20,11 @@ import logging
 from typing import Sequence
 
 import numpy as np
-import pandas as pd
 import torch as th
 
 from physicsnemo.core.version_check import OptionalImport
+
+pd = OptionalImport("pandas")
 
 xr = OptionalImport("xarray")
 
@@ -46,7 +47,7 @@ class ConstantCoupler:
         presteps: int = 0,
         input_time_dim: int = 2,
         output_time_dim: int = 2,
-        input_times: Sequence = [pd.Timedelta("24h"), pd.Timedelta("48h")],
+        input_times: Sequence = ["24h", "48h"],
         prepared_coupled_data=True,
     ):
         """
@@ -68,8 +69,8 @@ class ConstantCoupler:
         output_time_dim: int, optional
             number of output times for each model step, default 2
         input_times: Sequence, optional
-            sequence of pandas Timedelta objects that indicate which times are to be coupled,
-            default [pd.Timedelta("24h"), pd.Timedelta("48h")]
+            sequence of pandas Timedelta objects (or strings accepted by ``pd.Timedelta``)
+            that indicate which times are to be coupled, default ["24h", "48h"]
         prepared_coupled_data: boolean, optional
             If True assumes data in dataset has been prepared approiately for training:
             averages have already been calculated so that each time step denotes
@@ -195,24 +196,21 @@ class ConstantCoupler:
             The data to use when the dataloader requests coupled fields. Expected
             format is [B, F, T, C, H, W]
         """
-        if coupled_fields.shape[0] != self.batch_size:
-            raise ValueError(
-                f"Batch size of coupled field {coupled_fields.shape[0]} doesn't "
-                f" match configured batch size {self.batch_size}"
-            )
+
         # create buffer for coupling
+        # coupled_channel_indices covers selecting multiple instances of the same variable,
+        # e.g. z1000-24H and z1000-48H.
         coupled_fields = coupled_fields[
             :, :, :, self.coupled_channel_indices, :, :
         ].permute(2, 0, 3, 1, 4, 5)
         self.preset_coupled_fields = th.empty(
-            [self.coupled_integration_dim, self.batch_size, self.timevar_dim]
+            [self.coupled_integration_dim, coupled_fields.shape[1], self.timevar_dim]
             + list(self.spatial_dims)
         )
-        # we use a constant set of values so we just copy time 0
-        for i in range(len(self.preset_coupled_fields)):
-            self.preset_coupled_fields[i, :, :, :, :, :] = coupled_fields[
-                0, :, -1, :, :, :
-            ]
+
+        # we use a constant set of values so we just broadcast time 0
+        self.preset_coupled_fields[:, :, :, :, :, :] = coupled_fields[:1, :, :, :, :, :]
+
         # flag for construct integrated coupling method to use this array
         self.coupled_mode = True
 
@@ -292,7 +290,7 @@ class TrailingAverageCoupler:
         input_time_dim: int = 2,
         output_time_dim: int = 2,
         averaging_window: str = "24h",
-        input_times: Sequence = [pd.Timedelta("24h"), pd.Timedelta("48h")],
+        input_times: Sequence = ["24h", "48h"],
         prepared_coupled_data=True,
     ):
         """
@@ -316,8 +314,8 @@ class TrailingAverageCoupler:
         averaging_window: str, optional
             period over which coupled data is averaged before sent back to model, default "24h"
         input_times: Sequence, optional
-            sequence of pandas Timedelta objects that indicate which times are to be coupled,
-            default [pd.Timedelta("24h"), pd.Timedelta("48h")]
+            sequence of pandas Timedelta objects (or strings accepted by ``pd.Timedelta``)
+            that indicate which times are to be coupled, default ["24h", "48h"]
         prepared_coupled_data: boolean, optional
             If True assumes data in dataset has been prepared approiately for training:
             averages have already been calculated so that each time step denotes
@@ -467,12 +465,8 @@ class TrailingAverageCoupler:
             The data to use when the dataloader requests coupled fields. Expected
             format is [B, F, T, C, H, W]
         """
-        if coupled_fields.shape[0] != self.batch_size:
-            raise ValueError(
-                f"Batch size of coupled field {coupled_fields.shape[0]} doesn't "
-                f" match configured batch size {self.batch_size}"
-            )
-
+        # coupled_channel_indices covers selecting multiple instances of the same variable,
+        # e.g. z1000-24H and z1000-48H.
         coupled_fields = coupled_fields[:, :, :, self.coupled_channel_indices, :, :]
         # TODO: Now support output_time_dim =/= input_time_dim, but presteps need to be 0, will add support for presteps>0
         coupled_averaging_periods = []

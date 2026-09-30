@@ -26,4 +26,3 @@ initial_velocity_mode: previous_coords
 rollout_steps_from_target: true
 checkpoint_rollout: true
 teacher_forcing: false
-

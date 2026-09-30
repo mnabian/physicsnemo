@@ -24,6 +24,7 @@ Both use tensorclass .load(path) directly; no conversion from other formats.
 
 from __future__ import annotations
 
+import glob as _glob
 import logging
 from pathlib import Path
 from typing import Any, Iterator
@@ -34,7 +35,7 @@ from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes._rng import spawn_generator
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.mesh.calculus.measure import compose_measure_weights
+from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY, scale_measures
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ def _subsample_mesh_points(
     falls back to ``slice_points``.
 
     Unlike :func:`_subsample_mesh_cells`, this does NOT maintain
-    measure weights: dropping points removes cells implicitly, with
+    cell-measure corrections: dropping points removes cells implicitly, with
     no per-cell inclusion probability to invert.  Prefer cell
     subsampling when downstream code integrates over the mesh.
     """
@@ -72,14 +73,18 @@ def _subsample_mesh_points(
         device=mesh.points.device,
     )
     if mesh.n_cells == 0:
-        return Mesh(
+        result = Mesh(
             points=mesh.points[indices],
             cells=mesh.cells,
             point_data=mesh.point_data[indices],
             cell_data=mesh.cell_data,
             global_data=mesh.global_data,
         )
-    return mesh.slice_points(indices)
+    else:
+        result = mesh.slice_points(indices)
+    if EFFECTIVE_MEASURE_KEY in result.point_data:
+        scale_measures(result, mesh.n_points / n_points, association="points")
+    return result
 
 
 def _subsample_mesh_cells(
@@ -96,8 +101,8 @@ def _subsample_mesh_cells(
 
     Preserves the mesh's integration measure: every cell's inclusion
     probability is exactly ``k/N``, and the retained cells' measure
-    weights (see :mod:`physicsnemo.mesh.calculus.measure`) are multiplied by
-    ``N/k``, composing with any weights from earlier sampling stages.
+    (see :mod:`physicsnemo.mesh.calculus.measure`) is multiplied by
+    ``N/k``, composing with corrections from earlier sampling stages.
     Consumers of the effective cell measure (see
     :mod:`physicsnemo.mesh.calculus.measure`) then see an unbiased estimate
     of the full-mesh measure rather than the ~``k/N`` retained fraction.
@@ -124,8 +129,78 @@ def _subsample_mesh_cells(
     ### Compose the Horvitz-Thompson weight for this sampling stage.
     ### slice_cells/slice_points returned fresh TensorDicts, so the
     ### in-place update cannot leak into the memmap-backed source.
-    compose_measure_weights(mesh, n_total / n_cells)
+    scale_measures(mesh, n_total / n_cells)
     return mesh
+
+
+def _indices_to_runs(indices: torch.Tensor) -> list[tuple[int, int]]:
+    """Convert cyclic-block indices (1-2 ascending contiguous runs) to runs."""
+    breaks = torch.nonzero(indices[1:] != indices[:-1] + 1).flatten()
+    starts = [0] + [int(b) + 1 for b in breaks]
+    ends = [int(b) + 1 for b in breaks] + [len(indices)]
+    return [(int(indices[s]), int(indices[e - 1]) + 1) for s, e in zip(starts, ends)]
+
+
+def _zarr_mesh_subsampled(
+    group,
+    n_cells: int | None,
+    n_points: int | None,
+    generator: torch.Generator | None,
+) -> Mesh:
+    """Partial-read a zarr mesh group: fetch only the subsample window.
+
+    Reproduces :func:`_subsample_mesh` semantics (cyclic contiguous blocks,
+    vertex compaction, Horvitz-Thompson measure corrections) while reading only
+    the selected rows from the store instead of materializing the full mesh.
+    """
+    from physicsnemo.mesh.io import io_zarr as _ioz
+
+    total_cells = group["cells"].shape[0] if "cells" in group else 0
+    total_points = group["points"].shape[0]
+
+    if total_cells > 0 and n_cells is not None and total_cells > n_cells:
+        indices = _cyclic_block_indices(total_cells, n_cells, generator=generator)
+        runs = _indices_to_runs(indices)
+        cells = _ioz._read_rows(group["cells"], runs)
+        # Compact: gather only referenced vertices; remap connectivity to the
+        # sorted-unique order, matching slice_cells + slice_points.
+        referenced, inverse = torch.unique(cells, return_inverse=True)
+        cells = inverse.reshape(cells.shape)
+        ref_np = referenced.numpy()
+        mesh = Mesh(
+            points=_ioz._read_index(group["points"], ref_np),
+            cells=cells,
+            point_data=_ioz._read_tree(
+                group, "point_data", leaf_reader=lambda a: _ioz._read_index(a, ref_np)
+            ),
+            cell_data=_ioz._read_tree(
+                group, "cell_data", leaf_reader=lambda a: _ioz._read_rows(a, runs)
+            ),
+            global_data=_ioz._read_tree(group, "global_data"),
+        )
+        scale_measures(mesh, total_cells / n_cells)
+        if n_points is not None:
+            mesh = _subsample_mesh_points(mesh, n_points, generator=generator)
+        return mesh
+
+    if total_cells == 0 and n_points is not None and total_points > n_points:
+        indices = _cyclic_block_indices(total_points, n_points, generator=generator)
+        runs = _indices_to_runs(indices)
+        mesh = Mesh(
+            points=_ioz._read_rows(group["points"], runs),
+            point_data=_ioz._read_tree(
+                group, "point_data", leaf_reader=lambda a: _ioz._read_rows(a, runs)
+            ),
+            cell_data=_ioz._read_tree(group, "cell_data"),
+            global_data=_ioz._read_tree(group, "global_data"),
+        )
+        if EFFECTIVE_MEASURE_KEY in mesh.point_data:
+            scale_measures(mesh, total_points / n_points, association="points")
+        return mesh
+
+    # No subsampling applies (small mesh, or unsupported combination):
+    # eager full read keeps semantics identical to the memmap path.
+    return _ioz._mesh_from_group(group, None)
 
 
 def _subsample_mesh(
@@ -195,7 +270,7 @@ class MeshReader:
             choice for triangulated surface meshes where downstream
             transforms depend on cells (e.g. surface normals, cell
             centroids, cell_data fields).  Records the inverse inclusion
-            probability as measure weights, preserving the integration
+            probability to effective measures, preserving the integration
             measure (see :mod:`physicsnemo.mesh.calculus.measure`).  Applied before
             ``subsample_n_points`` when both are set.
         """
@@ -215,13 +290,49 @@ class MeshReader:
         if not self._root.is_dir():
             raise ValueError(f"Path must be a directory: {self._root}")
 
-        self._paths = sorted(self._root.glob(pattern))
+        # glob.glob instead of Path.glob: the latter re-stats each entry and
+        # silently drops entries under Lustre metadata-server load.
+        self._paths = sorted(
+            Path(p) for p in _glob.glob(str(self._root / pattern), recursive=True)
+        )
         if not self._paths:
             raise ValueError(f"No paths matching {pattern!r} found in {self._root}")
 
     def _load_sample(self, index: int) -> Mesh:
         """Load a single Mesh from disk."""
         mesh_path = self._paths[index]
+        if (mesh_path / "zarr.json").exists():
+            from physicsnemo.mesh.io import from_zarr, io_zarr
+
+            if (
+                self.subsample_n_cells is not None
+                or self.subsample_n_points is not None
+            ):
+                # Push the subsample into the read: fetch only the selected
+                # window from the store. The generator derivation matches
+                # __getitem__, so the draw is identical to subsampling after
+                # an eager load (whose subsample then no-ops).
+                # Cache opened store handles: re-opening walks the store's
+                # group-metadata chain, and on networked filesystems every
+                # uncached lookup is a metadata-server round-trip per draw.
+                cache = getattr(self, "_zarr_groups", None)
+                if cache is None:
+                    cache = self._zarr_groups = {}
+                group = cache.get(mesh_path)
+                if group is None:
+                    group = cache[mesh_path] = io_zarr._open_group(mesh_path)
+                generator = (
+                    None
+                    if self._seed_base is None
+                    else spawn_generator(self._seed_base, self._epoch, index)
+                )
+                return _zarr_mesh_subsampled(
+                    group,
+                    self.subsample_n_cells,
+                    self.subsample_n_points,
+                    generator,
+                )
+            return from_zarr(mesh_path)
         return Mesh.load(mesh_path)
 
     def _get_sample_metadata(self, index: int) -> dict[str, Any]:
@@ -345,7 +456,7 @@ class DomainMeshReader:
             sequential I/O, then compacts unreferenced vertices.
             Preserves cell topology and is the correct choice when
             downstream transforms depend on cells.  Records the
-            inverse inclusion probability as measure weights, preserving
+            inverse inclusion probability to effective measures, preserving
             the integration measure (see
             :mod:`physicsnemo.mesh.calculus.measure`).  Applied
             before
@@ -406,13 +517,63 @@ class DomainMeshReader:
         if not self._root.is_dir():
             raise ValueError(f"Path must be a directory: {self._root}")
 
-        self._paths = sorted(self._root.glob(pattern))
+        # glob.glob instead of Path.glob: the latter re-stats each entry and
+        # silently drops entries under Lustre metadata-server load.
+        self._paths = sorted(
+            Path(p) for p in _glob.glob(str(self._root / pattern), recursive=True)
+        )
         if not self._paths:
             raise ValueError(f"No paths matching {pattern!r} found in {self._root}")
 
     def _load_sample(self, index: int) -> DomainMesh:
         """Load a single DomainMesh from disk."""
-        return DomainMesh.load(self._paths[index])
+        path = self._paths[index]
+        if (path / "zarr.json").exists():
+            from physicsnemo.mesh.io import from_zarr, io_zarr
+
+            if (
+                self.subsample_n_cells is not None
+                or self.subsample_n_points is not None
+            ):
+                # Push the subsample into the read (window reads per
+                # sub-mesh); drop flags are honored at read time so skipped
+                # data is never fetched. Generator derivation and sub-mesh
+                # order match __getitem__, whose subsample then no-ops.
+                generator = (
+                    None
+                    if self._seed_base is None
+                    else spawn_generator(self._seed_base, self._epoch, index)
+                )
+                cache = getattr(self, "_zarr_groups", None)
+                if cache is None:
+                    cache = self._zarr_groups = {}
+                root = cache.get(path)
+                if root is None:
+                    root = cache[path] = io_zarr._open_group(path)
+                interior = _zarr_mesh_subsampled(
+                    root["interior"],
+                    self.subsample_n_cells,
+                    self.subsample_n_points,
+                    generator,
+                )
+                boundaries = {}
+                if not self.drop_in_file_boundaries and "boundaries" in root:
+                    boundaries = {
+                        name: _zarr_mesh_subsampled(
+                            grp,
+                            self.subsample_n_cells,
+                            self.subsample_n_points,
+                            generator,
+                        )
+                        for name, grp in root["boundaries"].groups()
+                    }
+                return DomainMesh(
+                    interior=interior,
+                    boundaries=boundaries,
+                    global_data=io_zarr._read_tree(root, "global_data"),
+                )
+            return from_zarr(path)
+        return DomainMesh.load(path)
 
     def __len__(self) -> int:
         return len(self._paths)
@@ -533,7 +694,12 @@ class DomainMeshReader:
                     glob_pattern,
                     matches[0],
                 )
-            new_boundaries[bnd_name] = Mesh.load(matches[0])
+            if (matches[0] / "zarr.json").exists():
+                from physicsnemo.mesh.io import from_zarr
+
+                new_boundaries[bnd_name] = from_zarr(matches[0])
+            else:
+                new_boundaries[bnd_name] = Mesh.load(matches[0])
 
         return DomainMesh(
             interior=dm.interior,

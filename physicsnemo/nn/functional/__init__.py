@@ -37,15 +37,24 @@ from .equivariant_ops import (
 )
 from .fourier_spectral import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
 from .geometry import (
+    closed_surface_volume_energy,
     displace_points,
     farthest_point_sampling,
     free_form_deform_points,
     mesh_poisson_disk_sample,
     mesh_to_voxel_fraction,
     morph_points,
+    radial_basis_function_deform_points,
     ray_mesh_intersect,
     remeshing,
+    shrinkwrap_points,
     signed_distance_field,
+    simplex_inversion_energy,
+    simplex_measure_energy,
+    simplex_strain_energy,
+    sobolev_deform_points,
+    surface_bending_energy,
+    total_measure_energy,
 )
 from .interpolation import (
     grid_to_point_interpolation,
@@ -54,6 +63,7 @@ from .interpolation import (
 )
 from .natten import na1d, na2d, na3d
 from .neighbors import contact_search, knn, radius_search
+from .normalization import safe_normalize
 from .regularization_parameterization import drop_path, weight_fact
 from .rendering import (
     isosurface_render,
@@ -65,9 +75,11 @@ from .rendering import (
     volume_render,
     wireframe_render,
 )
+from .weighted_multinomial import WeightedMultinomial, weighted_multinomial
 
 __all__ = [
     "contact_search",
+    "closed_surface_volume_energy",
     "displace_points",
     "irfft",
     "irfft2",
@@ -91,6 +103,7 @@ __all__ = [
     "mesh_poisson_disk_sample",
     "mesh_to_voxel_fraction",
     "morph_points",
+    "radial_basis_function_deform_points",
     "na1d",
     "na2d",
     "na3d",
@@ -99,6 +112,8 @@ __all__ = [
     "radius_search",
     "real",
     "ray_mesh_intersect",
+    "WeightedMultinomial",
+    "weighted_multinomial",
     "remeshing",
     "rectilinear_grid_curl",
     "rectilinear_grid_divergence",
@@ -107,11 +122,19 @@ __all__ = [
     "rfft",
     "rfft2",
     "point_cloud_render",
+    "safe_normalize",
     "scalar_field_to_rgba",
+    "shrinkwrap_points",
     "signed_distance_field",
+    "simplex_inversion_energy",
+    "simplex_measure_energy",
+    "simplex_strain_energy",
+    "sobolev_deform_points",
     "smooth_log",
     "spectral_grid_gradient",
     "spherical_basis",
+    "surface_bending_energy",
+    "total_measure_energy",
     "uniform_grid_gradient",
     "vector_field_to_rgba",
     "vector_project",

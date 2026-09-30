@@ -36,7 +36,11 @@ from torch.utils.data.distributed import DistributedSampler
 
 from physicsnemo.experimental.utils import CachedPreprocessingDataset
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.calculus.measure import compose_measure_weights
+from physicsnemo.mesh.calculus.measure import (
+    cell_measures,
+    scale_measures,
+    set_cell_measures,
+)
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.primitives.planar import structured_grid
 from physicsnemo.mesh.projections import embed
@@ -108,7 +112,7 @@ def create_domain_boundaries(
             target_n_spatial_dims=3,
         ).translate([0.0, 0.0, ground_z])
         # Flip cell winding so normals point upward (+z, into the fluid domain)
-        return Mesh(points=mesh.points, cells=mesh.cells[:, [0, 2, 1]])
+        return mesh.with_cells(mesh.cells[:, [0, 2, 1]])
 
     return {
         "slip_floor": _ground_patch(x_upstream, x_bl),
@@ -250,9 +254,8 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
           areas that approximate the surface Voronoi diagram of the subsampled
           centroids, at the cost of an O(N) nearest-neighbour pass over the
           full mesh each time a sample is loaded.
-        * **Uniform** (``voronoi=False``): records a single global
-          measure weight (see :mod:`physicsnemo.mesh.calculus.measure`) so
-          that the effective sampled area total matches the full surface.
+        * **Uniform** (``voronoi=False``): rescales the retained effective
+          measures so that their total matches the full surface.
           Much faster, but every subsampled cell gets the same factor
           regardless of local density.
 
@@ -269,7 +272,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
         Returns:
             Mesh with ``n_cells`` cells and a corrected integration measure
-            (uniform: measure weights; Voronoi: area/normal cache).
+            (uniform: reweighted measures; Voronoi: cluster measures and normals).
         """
         if n_cells <= 0:
             raise ValueError(f"{n_cells=!r} must be positive.")
@@ -281,26 +284,22 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         )
 
         if geometry_only:
-            boundary = Mesh(points=boundary.points, cells=boundary.cells)
+            measures = cell_measures(boundary)
+            boundary = boundary.with_data(point_data={}, cell_data={}, global_data={})
+            set_cell_measures(boundary, measures)
 
         if voronoi:
-            ### The Voronoi path replaces both areas AND normals with
-            ### locally-accumulated cluster values -- reconstructing the local
-            ### measure and normals, not just correcting the measure -- so it
-            ### keeps the geometry-cache override rather than measure weights.
+            ### Cluster measures are explicit represented areas; the geometric
+            ### cell-area cache continues to describe the retained triangles.
+            ### Cluster normals retain the established boundary-input convention.
             partition = partition_cells(mesh, seeds=boundary.cell_centroids)
-            boundary._cache["cell", "areas"] = partition.cluster_areas
+            set_cell_measures(boundary, partition.cluster_areas)
             boundary._cache["cell", "normals"] = partition.cluster_normals
         else:
-            ### Uniform measure correction via measure weights (see
-            ### physicsnemo.mesh.calculus.measure): one global factor makes the
-            ### effective sampled area total match the full surface exactly
-            ### for this realization (self-normalized / Hajek estimator).
-            ### GLOBE consumes cell_areas * measure_weights, so this is
-            ### numerically identical to the previous area-cache override
-            ### while keeping cell_areas purely geometric.
-            total_area = mesh.cell_areas.sum()
-            compose_measure_weights(boundary, total_area / boundary.cell_areas.sum())
+            ### Normalize the retained measures to preserve the full represented
+            ### area, including any earlier corrections (Hajek estimator).
+            total_area = cell_measures(mesh).sum()
+            scale_measures(boundary, total_area / cell_measures(boundary).sum())
 
         return boundary
 
@@ -493,12 +492,12 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
         ### Build the prediction Mesh (geometry + prediction targets)
         prediction_mesh = from_pyvista(pv_surface_pt)
-        prediction_mesh = Mesh(
-            points=prediction_mesh.points,
-            cells=prediction_mesh.cells,
+        prediction_mesh = prediction_mesh.with_data(
             point_data=prediction_mesh.point_data.select("C_p", "C_f").apply(
                 torch.Tensor.float
             ),
+            cell_data={},
+            global_data={},
         )
 
         ### Parse geometry reference CSV
@@ -642,15 +641,13 @@ def postprocess(
     # pred_mesh is a point cloud (no cells), so we construct a surface
     # mesh with true_mesh's cell connectivity for integration.
     a_ref = float(sample.dimensional_constants["A_ref"])
-    pred_surface = Mesh(
-        points=true_mesh.points,
-        cells=true_mesh.cells,
+    pred_surface = true_mesh.with_data(
         point_data=pred_mesh.point_data,
+        cell_data={},
+        global_data={},
     )
 
-    return Mesh(
-        points=true_mesh.points,
-        cells=true_mesh.cells,
+    return true_mesh.with_data(
         point_data=TensorDict(
             {
                 "true": true_selected,
@@ -659,6 +656,7 @@ def postprocess(
             },
             batch_size=[true_mesh.n_points],
         ),
+        cell_data={},
         global_data=TensorDict(
             {
                 "pred": compute_surface_force_coefficients(

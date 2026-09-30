@@ -46,12 +46,13 @@ ST_AVAILABLE = check_version_spec("torch", "2.6.0a0", hard_fail=False)
 if ST_AVAILABLE:
     # In minumum versions are met, we can import the shard tensor and spec.
 
-    from ._shard_tensor_spec import ShardTensorSpec
+    from ._shard_tensor_spec import ShardTensorSpec, validate_aligned_sharding
     from .shard_tensor import (
         ShardTensor,
         TensorPromotionMode,
         scatter_tensor,
     )
+    from .sync import sync_module_over_mesh
 
     def register_custom_ops():
         """Register all custom ShardTensor ops and shard-aware wrappers.
@@ -65,6 +66,7 @@ if ST_AVAILABLE:
             _tensor_ops,
             mean_wrapper,
             sum_wrapper,
+            unbind_wrapper,
         )
         from .shard_utils import register_shard_wrappers
 
@@ -79,3 +81,5 @@ else:
     ShardTensorSpec = None
     scatter_tensor = None
     TensorPromotionMode = None
+    sync_module_over_mesh = None
+    validate_aligned_sharding = None

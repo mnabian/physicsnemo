@@ -7,10 +7,6 @@ import torch
 
 pyg = pytest.importorskip("torch_geometric")
 
-from physicsnemo.experimental.models.geotransolver import (  # noqa: E402
-    GALE_FPP,
-    GeoTransolver,
-)
 from physicsnemo.experimental.models.meshtransolver import (  # noqa: E402
     CONTACT_FEATURE_DIM,
     ContactGraph,
@@ -19,6 +15,10 @@ from physicsnemo.experimental.models.meshtransolver import (  # noqa: E402
     MeshTransolver,
     SparseContactBlock,
     SparseContactGraphBuilder,
+)
+from physicsnemo.models.geotransolver import GeoTransolver  # noqa: E402
+from physicsnemo.models.geotransolver.flare_plus_plus import (  # noqa: E402
+    _FLAREPlusPlusAttention,
 )
 
 
@@ -165,8 +165,12 @@ def test_constructor_rejects_incompatible_hidden_and_head_dimensions():
         )
 
 
-def test_meshgeoflare_retains_full_geoflare_backbone_and_adds_parameters():
-    geoflare = GeoTransolver(
+@pytest.mark.parametrize("attention_type", ["GALE_FA", "GALE_FPP"])
+def test_meshgeoflare_retains_full_geoflare_backbone_and_adds_parameters(
+    attention_type,
+):
+    """Each mesh variant retains its own upstream attention backend."""
+    common = dict(
         functional_dim=6,
         out_dim=5,
         geometry_dim=3,
@@ -176,51 +180,70 @@ def test_meshgeoflare_retains_full_geoflare_backbone_and_adds_parameters():
         n_layers=2,
         slice_num=8,
         use_te=False,
-        attention_type="GALE_FA",
+        attention_type=attention_type,
     )
-    geoflarepp = GeoTransolver(
-        functional_dim=6,
-        out_dim=5,
-        geometry_dim=3,
-        global_dim=2,
-        n_hidden=32,
-        n_head=4,
-        n_layers=2,
-        slice_num=8,
-        use_te=False,
-        attention_type="GALE_FPP",
-    )
-    meshgeoflare = MeshGeoFLARE(
-        functional_dim=6,
-        out_dim=5,
+    backbone = GeoTransolver(**common)
+    hybrid = MeshGeoFLARE(
+        **common,
         input_dim_edges=4,
-        geometry_dim=3,
-        global_dim=2,
-        n_hidden=32,
-        n_head=4,
-        n_layers=2,
-        slice_num=8,
         num_pre_processor_layers=1,
         num_post_processor_layers=1,
-        use_te=False,
     )
+    hybrid_state = hybrid.state_dict()
+    for name, parameter in backbone.state_dict().items():
+        assert name in hybrid_state
+        assert hybrid_state[name].shape == parameter.shape
+    assert sum(p.numel() for p in hybrid.parameters()) > sum(
+        p.numel() for p in backbone.parameters()
+    )
+    assert isinstance(hybrid, GeoTransolver)
+    for mesh_block, base_block in zip(hybrid.blocks, backbone.blocks, strict=True):
+        assert type(mesh_block.Attn) is type(base_block.Attn)
+    if attention_type == "GALE_FPP":
+        assert all(
+            isinstance(block.Attn, _FLAREPlusPlusAttention) for block in hybrid.blocks
+        )
 
-    geoflare_state = geoflare.state_dict()
-    geoflarepp_state = geoflarepp.state_dict()
-    meshgeoflare_state = meshgeoflare.state_dict()
-    for name, parameter in geoflare_state.items():
-        assert name in meshgeoflare_state
-        assert meshgeoflare_state[name].shape == parameter.shape
-    for name, parameter in geoflarepp_state.items():
-        assert name in meshgeoflare_state
-        assert meshgeoflare_state[name].shape == parameter.shape
 
-    geoflare_parameters = sum(p.numel() for p in geoflare.parameters())
-    geoflarepp_parameters = sum(p.numel() for p in geoflarepp.parameters())
-    meshgeoflare_parameters = sum(p.numel() for p in meshgeoflare.parameters())
-    assert isinstance(meshgeoflare, GeoTransolver)
-    assert all(isinstance(block.Attn, GALE_FPP) for block in meshgeoflare.blocks)
-    assert geoflare_parameters < geoflarepp_parameters < meshgeoflare_parameters
+@pytest.mark.parametrize(
+    "components", [("blocks",), ("context", "preprocess", "blocks", "output")]
+)
+def test_meshgeoflare_upstream_checkpointing_preserves_outputs_and_gradients(
+    components,
+):
+    """The hidden-state seam honors upstream component checkpointing."""
+    common = dict(
+        functional_dim=6,
+        out_dim=5,
+        geometry_dim=3,
+        global_dim=2,
+        n_hidden=32,
+        n_head=4,
+        n_layers=2,
+        slice_num=8,
+        attention_type="GALE_FA",
+        mesh_context_fusion="pre_post",
+        mesh_context_use_global=True,
+    )
+    plain = MeshGeoFLARE(**common).train()
+    checkpointed = MeshGeoFLARE(
+        **common,
+        activation_checkpointing=True,
+        activation_checkpointing_components=components,
+    ).train()
+    checkpointed.load_state_dict(plain.state_dict(), strict=True)
+    graph = _graph(7)
+    global_embedding = torch.randn(1, 1, 2)
+    expected = _forward(plain, graph, global_embedding)
+    actual = _forward(checkpointed, graph, global_embedding)
+    expected.square().mean().backward()
+    actual.square().mean().backward()
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    for (name, parameter), (other_name, other) in zip(
+        plain.named_parameters(), checkpointed.named_parameters(), strict=True
+    ):
+        assert name == other_name
+        torch.testing.assert_close(parameter.grad, other.grad)
 
 
 def test_zero_gated_mesh_residuals_exactly_match_geoflare_backbone():

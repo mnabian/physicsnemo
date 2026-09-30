@@ -55,7 +55,7 @@ import torch
 from jaxtyping import Float
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
-from physicsnemo.mesh.calculus.measure import cell_measures
+from physicsnemo.mesh.calculus.measure import cell_measures, point_measures
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -254,6 +254,9 @@ def integrate(
     selects P0 cell quadrature or P1 point quadrature from ``data_source`` and
     resolves ``field`` from a string key or tensor.
 
+    Call it as ``integrate(mesh, ...)`` or as ``mesh.integrate(...)``. The
+    bound method supplies ``mesh`` automatically.
+
     Parameters
     ----------
     mesh : Mesh
@@ -315,6 +318,28 @@ def integrate(
             return _integrate_point_data(mesh, resolved, nan_policy=nan_policy)
         case _:
             raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
+
+
+def integrate_samples(
+    mesh: "Mesh",
+    field: str | tuple[str, ...] | torch.Tensor,
+    *,
+    nan_policy: NanPolicy = "omit",
+) -> torch.Tensor:
+    """Integrate independent point samples using explicit point measures.
+
+    This is a quadrature sum, regardless of whether the mesh has cells. It
+    does not interpolate values through cells or infer a point measure.
+    Missing measures raise KeyError. Use an ordinary tensor sum for counting
+    measure, or set_point_measures with ones and dimension=0 explicitly.
+    For a piecewise-linear vertex field over connected cells, use integrate
+    with data_source="points" instead; that retains cell-based NaN handling.
+    """
+    values = _resolve_field(mesh, field, "points")
+    if values.ndim == 0 or values.shape[0] != mesh.n_points:
+        raise ValueError("Point sample leading dimension must equal n_points")
+    measures = point_measures(mesh).reshape(-1, *([1] * (values.ndim - 1)))
+    return _sum_with_nan_policy(values * measures, dim=0, nan_policy=nan_policy)
 
 
 def integrate_cell_data(
@@ -513,6 +538,10 @@ def integrate_moment(
     outer product. The implementation evaluates a batched weighted matrix
     product and never materializes the per-cell outer product.
 
+    Call it as ``integrate_moment(mesh, ...)`` or as
+    ``mesh.integrate_moment(...)``. The bound method supplies ``mesh``
+    automatically.
+
     Parameters
     ----------
     mesh : Mesh
@@ -616,6 +645,9 @@ def integrate_flux(
 
     This is only defined for codimension-1 meshes (surfaces in 3D, curves
     in 2D) where unique cell normals exist.
+
+    Call it as ``integrate_flux(mesh, ...)`` or as ``mesh.integrate_flux(...)``.
+    The bound method supplies ``mesh`` automatically.
 
     For cell data, the flux is:
 

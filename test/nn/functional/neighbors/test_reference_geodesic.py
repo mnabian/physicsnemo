@@ -1,15 +1,78 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+import importlib
 import math
 
 import numpy as np
 import pytest
 import torch
 
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.nn.functional.neighbors.reference_geodesic import (
     reference_geodesic_exclusions,
 )
+
+requires_scipy = pytest.mark.skipif(
+    not check_version_spec("scipy", hard_fail=False),
+    reason="Reference-geodesic algorithm tests require the optional SciPy dependency",
+)
+
+
+def test_missing_scipy_is_delayed_until_geodesic_preprocessing(monkeypatch):
+    """Missing SciPy leaves imports usable and gives an actionable call error."""
+    from physicsnemo.core import version_check
+    from physicsnemo.nn.functional.neighbors.surface_contact import (
+        closest_point_triangle,
+    )
+
+    module = importlib.import_module(
+        "physicsnemo.nn.functional.neighbors.reference_geodesic"
+    )
+    available = version_check.is_package_available
+    findable = version_check._is_module_findable
+    monkeypatch.setattr(
+        version_check,
+        "is_package_available",
+        lambda name: False if name == "scipy" else available(name),
+    )
+    monkeypatch.setattr(
+        version_check,
+        "_is_module_findable",
+        lambda name: False if name.startswith("scipy") else findable(name),
+    )
+    monkeypatch.setattr(module._scipy_sparse, "_module", None)
+
+    # Reload exercises the module's import path, not just an already-loaded proxy.
+    importlib.reload(module)
+    assert module._scipy_sparse._module is None
+    points = torch.tensor([[0.25, 0.25, 1.0]])
+    triangles = torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
+    torch.testing.assert_close(
+        closest_point_triangle(points, triangles).distance, torch.ones(1)
+    )
+    with pytest.raises(
+        ImportError, match="reference_geodesic_exclusions requires SciPy"
+    ):
+        module.reference_geodesic_exclusions(
+            torch.empty(0, 3),
+            torch.empty(0, 3, dtype=torch.long),
+            torch.empty(0),
+            torch.empty(0),
+        )
 
 
 def strip():
@@ -49,6 +112,7 @@ def dense_oracle(positions, faces, ng, fg, factor, scale=1.0, minimum=0.0):
 
 @pytest.mark.parametrize("factor", [0.0, 1.0, math.sqrt(2), 3.0])
 @pytest.mark.parametrize("scale,minimum", [(1.0, 0.0), (0.7, 0.2), (0.0, 1.1)])
+@requires_scipy
 def test_matches_dense_oracle_with_pair_specific_gaps(factor, scale, minimum):
     p, f = strip()
     ng = torch.linspace(0.0, 1.4, len(p), dtype=torch.float64)
@@ -61,6 +125,7 @@ def test_matches_dense_oracle_with_pair_specific_gaps(factor, scale, minimum):
     assert (0, 4) not in expected  # Nearly coincident but disconnected sheet.
 
 
+@requires_scipy
 def test_strict_boundary_incidence_and_optional_disable():
     p, f = strip()
     g = torch.ones(len(p), dtype=torch.float64) / 2
@@ -84,6 +149,7 @@ def test_strict_boundary_incidence_and_optional_disable():
     assert set(map(tuple, zeros.T.tolist())) == pairs(0.0)
 
 
+@requires_scipy
 def test_graph_distance_not_euclidean_and_no_quad_diagonal_shortcut():
     p, f = strip()
     # Far material end folds spatially next to node 0, without shortening the
@@ -107,6 +173,7 @@ def test_graph_distance_not_euclidean_and_no_quad_diagonal_shortcut():
     assert (0, 1) not in set(map(tuple, pairs.T.tolist()))  # Path 2, not sqrt(2).
 
 
+@requires_scipy
 def test_zero_length_material_edges_and_no_normalization_or_gradient_graph():
     p, f = strip()
     p[2] = p[0]
@@ -127,6 +194,7 @@ def test_zero_length_material_edges_and_no_normalization_or_gradient_graph():
     )
 
 
+@requires_scipy
 def test_triangle_padding_and_empty_mesh():
     p = torch.tensor([[0.0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]])
     f = torch.tensor([[0, 1, 2], [1, 2, 3]])
@@ -152,6 +220,7 @@ def test_triangle_padding_and_empty_mesh():
         ("max_pairs", True),
     ],
 )
+@requires_scipy
 def test_invalid_options(option, value):
     p, f = strip()
     with pytest.raises(ValueError):
@@ -160,6 +229,7 @@ def test_invalid_options(option, value):
         )
 
 
+@requires_scipy
 def test_budget_never_silently_truncates():
     p, f = strip()
     with pytest.raises(RuntimeError, match="no pairs truncated"):
@@ -175,6 +245,7 @@ def test_budget_never_silently_truncates():
 @pytest.mark.parametrize(
     "which", ["position", "node_gap", "face_gap", "index", "repeated"]
 )
+@requires_scipy
 def test_invalid_geometry(which):
     p, f = strip()
     ng = torch.ones(len(p))

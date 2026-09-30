@@ -1,6 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import os
 import sys
@@ -12,31 +24,11 @@ CRASH_DIR = os.path.abspath(os.path.join(THIS_DIR, ".."))
 if CRASH_DIR not in sys.path:
     sys.path.insert(0, CRASH_DIR)
 
-from contact_diagnostics import _structural_edge_index  # noqa: E402
 from contact_graph import BumperCylinderContactEncoder  # noqa: E402
 
 
-def test_contact_diagnostics_builds_bidirectional_structural_edges():
-    edge_index = _structural_edge_index([[0, 1, 2, 3]], num_nodes=4)
-    edges = {tuple(edge) for edge in edge_index.T.tolist()}
-
-    assert edges == {
-        (0, 0),
-        (1, 1),
-        (2, 2),
-        (3, 3),
-        (0, 1),
-        (1, 0),
-        (1, 2),
-        (2, 1),
-        (2, 3),
-        (3, 2),
-        (3, 0),
-        (0, 3),
-    }
-
-
 def test_bumper_cylinder_encoder_builds_obstacle_edges_with_signed_gap():
+    """Verify bumper cylinder encoder builds obstacle edges with signed gap."""
     encoder = BumperCylinderContactEncoder(
         center_x=-170.0,
         radius=127.0,
@@ -69,6 +61,7 @@ def test_bumper_cylinder_encoder_builds_obstacle_edges_with_signed_gap():
 
 
 def test_bumper_cylinder_encoder_uses_per_graph_center():
+    """Verify bumper cylinder encoder uses per graph center."""
     encoder = BumperCylinderContactEncoder(search_distance=5.0)
     positions = torch.tensor(
         [

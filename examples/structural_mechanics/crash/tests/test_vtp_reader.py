@@ -36,6 +36,7 @@ from vtp_reader import (
 
 
 def test_vtp_tensor_cache_round_trip_and_source_validation(tmp_path):
+    """Verify VTP tensor cache round trip and source validation."""
     source = tmp_path / "Run1.vtp"
     source.write_bytes(b"source-v1")
     cache_path = _vtp_cache_path(str(tmp_path / "cache"), str(source))
@@ -200,6 +201,7 @@ def test_build_edges_from_mesh_connectivity():
 
 
 def test_collect_mesh_pos_skips_mesh_construction_when_not_writing(monkeypatch):
+    """Verify collect mesh pos skips mesh construction when not writing."""
     positions = np.arange(36, dtype=np.float32).reshape(3, 4, 3)
 
     def fail_if_constructed(*args, **kwargs):

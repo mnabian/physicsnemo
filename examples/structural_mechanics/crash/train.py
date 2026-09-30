@@ -87,6 +87,7 @@ class ValidationEarlyStopping:
 
     @property
     def enabled(self) -> bool:
+        """Return whether a positive early-stopping patience was configured."""
         return self.patience > 0
 
     def update(self, metric: float) -> tuple[bool, bool]:
@@ -124,6 +125,7 @@ class LinearTeacherForcingSchedule:
                 raise ValueError(f"teacher-forcing {name} must be in [0, 1]")
 
     def probability(self, epoch: int) -> float:
+        """Return the teacher-forcing probability for a zero-based epoch."""
         if epoch < 0:
             raise ValueError("epoch cannot be negative")
         if epoch < self.warmup_epochs:
@@ -515,6 +517,7 @@ class Trainer:
                 )
 
     def train(self, sample: SimSample, epoch: int = 0):
+        """Run the configured training budget with validation and restart checkpoints."""
         self.optimizer.zero_grad()
         loss = self.forward(sample, epoch)
         self.backward(loss)
@@ -643,6 +646,7 @@ class Trainer:
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
+    """Run distributed crash training from a Hydra experiment configuration."""
     configure_deterministic_training(bool(cfg.training.get("deterministic", False)))
     DistributedManager.initialize()
     dist = DistributedManager()

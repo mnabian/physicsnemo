@@ -1,5 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Real-model contact rollouts; no stubbed DeFormer parents."""
 
@@ -22,6 +35,7 @@ from rollout import MeshGeoFLAREAutoregressive  # noqa: E402
 
 
 def make_model(**overrides):
+    """Construct a small DeFormer contact model with explicit test overrides."""
     kwargs = dict(
         num_time_steps=4,
         dt=0.1,
@@ -69,6 +83,7 @@ def make_model(**overrides):
 
 
 def make_sample(device="cpu"):
+    """Build a deterministic synthetic crash sample for rollout tests."""
     torch.manual_seed(121)
     n = 6
     coords = (torch.randn(n, 3, device=device) * 0.2).requires_grad_()
@@ -110,6 +125,7 @@ def make_sample(device="cpu"):
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_real_checkpointed_bptt_and_physical_contact_features(implementation, device):
+    """Verify real checkpointed BPTT and physical contact features."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     torch.manual_seed(123)
@@ -163,6 +179,7 @@ def test_real_checkpointed_bptt_and_physical_contact_features(implementation, de
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_checkpointed_and_uncheckpointed_rollouts_match(device):
+    """Verify checkpointed and uncheckpointed rollouts match."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     torch.manual_seed(123)
@@ -189,6 +206,7 @@ def test_checkpointed_and_uncheckpointed_rollouts_match(device):
 def test_contact_gate_learns_with_zero_mesh_gate_and_zero_contact_is_identity(
     mesh_width,
 ):
+    """Verify contact gate learns with zero mesh gate and zero contact is identity."""
     torch.manual_seed(123)
     model = make_model(
         mesh_pre_residual_gate_init=0, mesh_hidden_dim=mesh_width, contact_gate_init=0
@@ -210,6 +228,7 @@ def test_contact_gate_learns_with_zero_mesh_gate_and_zero_contact_is_identity(
 def test_memory_options_preserve_bptt_values_and_gradients(
     device, outer_checkpoint, offload, weighted
 ):
+    """Verify memory options preserve BPTT values and gradients."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     torch.manual_seed(126)
@@ -303,6 +322,7 @@ def test_memory_overrides_only_change_execution_options(offload):
 
 
 def test_evaluation_never_reads_future_targets_and_post_graph_stays_structural():
+    """Verify evaluation never reads future targets and post graph stays structural."""
     model = make_model(teacher_forcing=True).eval()
     sample, stats = make_sample()
     structural_edges = sample.graph.edge_index.clone()
@@ -326,6 +346,7 @@ def test_evaluation_never_reads_future_targets_and_post_graph_stays_structural()
 def test_full_car_thickness_without_globals_and_empty_kinematic_contact(
     checkpoint_contact,
 ):
+    """Verify full car thickness without globals and empty kinematic contact."""
     model = make_model(checkpoint_contact=checkpoint_contact)
     sample, stats = make_sample()
     torch.testing.assert_close(
@@ -342,6 +363,7 @@ def test_full_car_thickness_without_globals_and_empty_kinematic_contact(
 
 
 def test_stationary_cylinder_kinematics_and_smooth_weights():
+    """Verify stationary cylinder kinematics and smooth weights."""
     encoder = BumperCylinderContactEncoder(
         center_x=0,
         radius=1,
@@ -387,6 +409,7 @@ def test_contact_disable_override_preserves_model_and_training():
     ],
 )
 def test_incompatible_contact_options_rejected(kwargs):
+    """Verify incompatible contact options rejected."""
     with pytest.raises(ValueError):
         make_model(**kwargs)
 
@@ -397,6 +420,7 @@ def test_incompatible_contact_options_rejected(kwargs):
 )
 @pytest.mark.parametrize("checkpoint_contact", [False, True])
 def test_mixed_precision_contact_rollout(device, dtype, checkpoint_contact):
+    """Verify mixed precision contact rollout."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     model = (

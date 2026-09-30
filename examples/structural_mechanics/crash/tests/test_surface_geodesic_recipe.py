@@ -1,5 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import copy
 import sys
@@ -24,6 +37,7 @@ from physicsnemo.nn.functional.neighbors.reference_geodesic import (  # noqa: E4
 
 
 def test_config_changes_only_static_exclusions():
+    """Verify config changes only static exclusions."""
     with initialize_config_dir(config_dir=str(CRASH_DIR / "conf"), version_base="1.3"):
         old = compose(
             config_name="crash_deformer_contact_autoregressive",
@@ -53,6 +67,7 @@ def test_config_changes_only_static_exclusions():
 
 
 def test_gap_floor_config_is_explicit_and_independent_of_message_band():
+    """Verify gap floor config is explicit and independent of message band."""
     with initialize_config_dir(config_dir=str(CRASH_DIR / "conf"), version_base="1.3"):
         old = compose(
             config_name="crash_deformer_contact_autoregressive",
@@ -70,6 +85,7 @@ def test_gap_floor_config_is_explicit_and_independent_of_message_band():
 
 
 def test_datapipe_uses_physical_initial_geometry_and_content_safe_cache(tmp_path):
+    """Verify datapipe uses physical initial geometry and content safe cache."""
     import pyvista as pv
     from datapipe import CrashGraphDataset
     from vtp_reader import Reader
@@ -169,6 +185,7 @@ def test_datapipe_uses_physical_initial_geometry_and_content_safe_cache(tmp_path
 def test_geodesic_filter_preserves_bptt_and_checkpoint_gradients(
     device, implementation
 ):
+    """Verify geodesic filter preserves BPTT and checkpoint gradients."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     torch.manual_seed(721)

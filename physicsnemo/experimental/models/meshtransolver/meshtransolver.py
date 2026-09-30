@@ -1,16 +1,31 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-r"""Hybrid MeshGraphNet and physics-attention architectures.
+r"""Hybrid structural-mesh and geometry-aware attention architectures.
 
-This module implements the reusable processor family described in
-``arXiv:2605.11784``. A structural-mesh MPNN extracts local features, a global
-physics-attention processor communicates across the full graph, and a second
-mesh-only MPNN refines the latent state.
+``MeshGeoFLARE`` implements DeFormer: a structural MPNN processes the native
+GeoTransolver node latent, optional contact messages augment that latent, and
+geometry-aware FLARE communicates globally. A post-MPNN refines physical outputs.
+The crash reference recipe selects point-space FLARE (``GALE_FA``), geometry
+conditioning before and after attention, and predictive node-to-face contact.
 
-The paper does not provide source code. Consequently, ambiguous implementation
-choices are exposed as constructor options rather than hidden in the model.
+The broader mesh-attention family is inspired by ``arXiv:2605.11784``; DeFormer's
+latent integration and predictive surface-contact mechanism are independent
+extensions, not a claim of exact reproduction. Historical class names and
+constructor options are retained for checkpoint/configuration compatibility.
 """
 
 from dataclasses import dataclass
@@ -734,7 +749,12 @@ class MeshGeoTransolver(MeshAttentionHybrid):
 
 
 class MeshGeoFLARE(GeoTransolver):
-    r"""FLARE-family GeoTransolver with additive mesh message passing.
+    r"""DeFormer: FLARE-family GeoTransolver with additive mesh message passing.
+
+    The historical ``MeshGeoFLARE`` class name is retained so saved model
+    metadata and Hydra targets remain loadable. The reference DeFormer recipe
+    explicitly selects ``attention_type="GALE_FA"`` (original FLARE); the class
+    also accepts FLARE++ for compatibility with earlier experiments.
 
     The complete :class:`GeoTransolver` backbone is retained: its input
     projection, geometry/global context builder, FLARE-family blocks, local
@@ -742,8 +762,9 @@ class MeshGeoFLARE(GeoTransolver):
     pre-mesh processor operates on the native ``n_hidden`` node embedding after
     GeoTransolver's input projection and before local-feature concatenation and
     FLARE attention. A second mesh processor refines the final physical outputs.
-    Zero-initialized residual gates recover the exact GeoFLARE function while
-    avoiding a decode-to-input/re-encode bottleneck. Consequently, every
+    With contact disabled, setting both mesh residual gates to zero recovers the
+    matching GeoFLARE function. The latent pre-processor avoids a
+    decode-to-input/re-encode bottleneck. Consequently, every
     fixed-query GeoFLARE parameter is present with the same shape and
     MeshGeoFLARE always has strictly more parameters for a matching configuration.
 

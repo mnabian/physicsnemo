@@ -1,14 +1,26 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-r"""Sparse contact graph utilities for mesh-attention models.
+r"""Contact graph representation, feature encoding, and gated latent messages.
 
-The paper motivating this module specifies dynamic radius search, shell-thickness
-filtering, per-node top-k sparsification, and a gated latent residual. It does not
-specify a particular collision library or obstacle representation. This module
-therefore exposes a small generic graph contract that recipe-specific encoders can
-also populate for analytic or discretized rigid geometry.
+DeFormer's reference recipe populates this graph with predictive node-to-face
+contact and live barycentric interpolation, using ``SurfaceContactGraphBuilder``.
+Candidate search is separate from the learned message block. The legacy radius
+builder and obstacle graph fields remain for historical model/configuration
+compatibility; they are not used by the reference surface-contact recipe.
 """
 
 from __future__ import annotations

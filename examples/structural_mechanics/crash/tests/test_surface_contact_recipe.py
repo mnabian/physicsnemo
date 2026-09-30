@@ -1,5 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import copy
 import sys
@@ -19,6 +32,7 @@ from test_deformer_contact import make_model, make_sample  # noqa: E402
 
 
 def surface_sample(device):
+    """Attach face connectivity to a synthetic closed-loop crash sample."""
     sample, stats = make_sample(device)
     coords = torch.tensor(
         [
@@ -37,6 +51,7 @@ def surface_sample(device):
 
 
 def test_topology_parser_and_batch_offsets():
+    """Verify topology parser and batch offsets."""
     faces = surface_faces_from_cells(np.array([3, 0, 1, 2, 4, 0, 1, 2, 3]), 4)
     torch.testing.assert_close(faces, torch.tensor([[0, 1, 2, 2], [0, 1, 2, 3]]))
     padded = surface_faces_from_cells(np.array([4, 0, 1, 2, 2]), 4)
@@ -72,6 +87,7 @@ def test_topology_parser_and_batch_offsets():
 def test_real_surface_bptt_checkpoint_equivalence(
     device, implementation, quad, predictive, material
 ):
+    """Verify real surface BPTT checkpoint equivalence."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     torch.manual_seed(721)
@@ -133,6 +149,7 @@ def test_real_surface_bptt_checkpoint_equivalence(
 
 
 def test_surface_recipe_preserves_training_budget():
+    """Verify surface recipe preserves training budget."""
     with initialize_config_dir(config_dir=str(CRASH_DIR / "conf"), version_base="1.3"):
         new = compose(
             config_name="crash_deformer_contact_autoregressive",
@@ -154,6 +171,7 @@ def test_surface_recipe_preserves_training_budget():
 
 
 def test_predictive_surface_recipe_preserves_architecture_and_budget():
+    """Verify predictive surface recipe preserves architecture and budget."""
     with initialize_config_dir(config_dir=str(CRASH_DIR / "conf"), version_base="1.3"):
         new = compose(config_name="crash_deformer_contact_autoregressive")
         old = compose(
@@ -177,6 +195,7 @@ def test_predictive_surface_recipe_preserves_architecture_and_budget():
 
 @pytest.mark.parametrize("material", [False, True])
 def test_predictive_surface_does_not_read_future_ground_truth(material):
+    """Verify predictive surface does not read future ground truth."""
     model = make_model(
         contact_graph_backend="surface",
         contact_surface_predictive=True,
@@ -197,6 +216,7 @@ def test_predictive_surface_does_not_read_future_ground_truth(material):
 
 @pytest.mark.parametrize("exclusion", ["incidence", "one_ring"])
 def test_surface_datapipe_reads_connectivity_and_batches(tmp_path, exclusion):
+    """Verify surface datapipe reads connectivity and batches."""
     import pyvista as pv
     from datapipe import CrashGraphDataset
     from vtp_reader import Reader
@@ -248,6 +268,7 @@ def test_surface_datapipe_reads_connectivity_and_batches(tmp_path, exclusion):
 
 
 def test_surface_bfloat16_autocast_backward():
+    """Verify surface bfloat16 autocast backward."""
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     model = (
@@ -276,6 +297,7 @@ def test_surface_bfloat16_autocast_backward():
 
 
 def test_surface_thickness_never_uses_implicit_fallback():
+    """Verify surface thickness never uses implicit fallback."""
     model = make_model(
         contact_graph_backend="surface",
         base_shell_thickness=7.0,
@@ -294,6 +316,7 @@ def test_surface_thickness_never_uses_implicit_fallback():
 
 
 def test_surface_datapipe_requires_thickness_even_without_static_feature(tmp_path):
+    """Verify surface datapipe requires thickness even without static feature."""
     import pyvista as pv
     from datapipe import CrashGraphDataset
     from vtp_reader import Reader

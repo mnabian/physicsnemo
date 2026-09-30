@@ -1,6 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import os
 import sys
@@ -23,6 +35,7 @@ from train import (  # noqa: E402
 
 
 def test_execution_limit_does_not_change_training_target():
+    """Verify execution limit does not change training target."""
     assert execution_end_epoch(0, 500, None) == 500
     assert execution_end_epoch(0, 500, 10) == 10
     assert execution_end_epoch(10, 500, 1) == 11
@@ -33,6 +46,7 @@ def test_execution_limit_does_not_change_training_target():
 
 
 def test_validation_early_stopping_resets_on_improvement():
+    """Verify validation early stopping resets on improvement."""
     controller = ValidationEarlyStopping(patience=2, min_delta=0.01)
 
     assert controller.update(1.0) == (False, True)
@@ -44,6 +58,7 @@ def test_validation_early_stopping_resets_on_improvement():
 
 
 def test_validation_early_stopping_disabled_and_validates_settings():
+    """Verify validation early stopping disabled and validates settings."""
     controller = ValidationEarlyStopping(patience=0)
 
     assert controller.update(float("nan")) == (False, False)
@@ -57,6 +72,7 @@ def test_validation_early_stopping_disabled_and_validates_settings():
 
 
 def test_linear_teacher_forcing_schedule():
+    """Verify linear teacher forcing schedule."""
     schedule = LinearTeacherForcingSchedule(
         warmup_epochs=2,
         decay_epochs=4,
@@ -77,6 +93,7 @@ def test_linear_teacher_forcing_schedule():
 
 
 def test_masked_acceleration_mse_uses_only_reference_state_transitions():
+    """Verify masked acceleration MSE uses only reference state transitions."""
     prediction = torch.tensor([1.0, 10.0, 3.0]).view(1, 3, 1).expand(-1, -1, 3)
     target = torch.zeros_like(prediction)
     mask = torch.tensor([True, False, True])
@@ -96,6 +113,7 @@ def test_masked_acceleration_mse_uses_only_reference_state_transitions():
 
 
 def test_average_model_gradients_reduces_after_backward(monkeypatch):
+    """Verify average model gradients reduces after backward."""
     model = torch.nn.Sequential(torch.nn.Linear(2, 1), torch.nn.LayerNorm(1))
     original_gradients = []
     for index, parameter in enumerate(model.parameters(), start=1):

@@ -1,5 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import copy
 import io
@@ -23,6 +36,7 @@ from physicsnemo.experimental.models.meshtransolver import FunctionalContactGrap
 
 
 def test_stationary_quad_patch_does_not_contact_itself():
+    """Verify stationary quad patch does not contact itself."""
     points = torch.tensor([[x * 5.0, y * 5.0, 0.0] for y in range(3) for x in range(3)])
     cells = [
         [3 * y + x, 3 * y + x + 1, 3 * (y + 1) + x + 1, 3 * (y + 1) + x]
@@ -44,6 +58,7 @@ def test_stationary_quad_patch_does_not_contact_itself():
 
 
 def test_distant_same_component_fold_contact_is_preserved():
+    """Verify distant same component fold contact is preserved."""
     points = torch.tensor(
         [
             [0.0, 0, 0],
@@ -66,6 +81,7 @@ def test_distant_same_component_fold_contact_is_preserved():
 
 
 def test_polygon_diagonals_beyond_two_hops_are_excluded():
+    """Verify polygon diagonals beyond two hops are excluded."""
     edges = torch.stack((torch.arange(6), torch.arange(6).roll(-1)))
     exclusions = material_contact_exclusions(edges, 6, 2, [6, 0, 1, 2, 3, 4, 5])
     assert exclusions.shape == (2, 30)
@@ -73,6 +89,7 @@ def test_polygon_diagonals_beyond_two_hops_are_excluded():
 
 
 def test_material_exclusion_sparse_scaling():
+    """Verify material exclusion sparse scaling."""
     n = 100_000
     edges = torch.stack((torch.arange(n - 1), torch.arange(1, n)))
     exclusions = material_contact_exclusions(edges, n, 2)
@@ -80,6 +97,7 @@ def test_material_exclusion_sparse_scaling():
 
 
 def test_topology_cache_requires_elements_and_roundtrips(tmp_path):
+    """Verify topology cache requires elements and roundtrips."""
     source = tmp_path / "case.vtp"
     source.touch()
     cache = str(tmp_path / "case.pt")
@@ -100,6 +118,7 @@ def test_topology_cache_requires_elements_and_roundtrips(tmp_path):
 
 
 def test_real_vtp_datapipe_caches_and_shares_exclusions(tmp_path):
+    """Verify real VTP datapipe caches and shares exclusions."""
     import pyvista as pv
     from vtp_reader import Reader
 
@@ -138,6 +157,7 @@ def test_real_vtp_datapipe_caches_and_shares_exclusions(tmp_path):
 
 
 def window_dataset():
+    """Build a synthetic two-history-frame dataset for seeded BPTT windows."""
     dataset = CrashBaseDataset.__new__(CrashBaseDataset)
     dataset.num_samples = 1
     dataset.num_steps = 26
@@ -154,6 +174,7 @@ def window_dataset():
 
 
 def test_windows_independent_of_global_rng_order_model_and_restart():
+    """Verify windows independent of global RNG order model and restart."""
     data = window_dataset()
 
     def windows():
@@ -178,6 +199,7 @@ def test_windows_independent_of_global_rng_order_model_and_restart():
 
 
 def test_shared_model_parameters_and_rng_match_no_contact_exactly():
+    """Verify shared model parameters and RNG match no contact exactly."""
     torch.manual_seed(42)
     plain = make_model(
         use_contact=False, enable_contact=False, contact_isolate_rng=True
@@ -194,6 +216,7 @@ def test_shared_model_parameters_and_rng_match_no_contact_exactly():
 
 
 def test_stochastic_optimizer_restart_replays_exactly():
+    """Verify stochastic optimizer restart replays exactly."""
     torch.manual_seed(83)
     random.seed(83)
     np.random.seed(83)
@@ -238,6 +261,7 @@ def test_stochastic_optimizer_restart_replays_exactly():
 
 
 def test_deterministic_execution_requires_valid_workspace(monkeypatch):
+    """Verify deterministic execution requires valid workspace."""
     import os
 
     old = (
@@ -270,6 +294,7 @@ def test_deterministic_execution_requires_valid_workspace(monkeypatch):
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_v2_real_rollout_bptt(checkpoint, implementation, device):
+    """Verify nearest-node contact real rollout BPTT."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     model = make_model(

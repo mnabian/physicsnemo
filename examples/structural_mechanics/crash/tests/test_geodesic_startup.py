@@ -1,5 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import multiprocessing as mp
 import random
@@ -23,11 +36,13 @@ OPTIONS = dict(distance_scale=2**0.5, gap_scale=1.0, gap_min=5.0, max_pairs=1000
 
 
 def inputs():
+    """Return a small mesh and thickness values for exclusion-cache tests."""
     p, f = strip()
     return p, f, torch.ones(len(p)), dict(OPTIONS)
 
 
 def test_cache_cold_warm_memory_exact_and_rng_independent(tmp_path, monkeypatch):
+    """Verify cache cold warm memory exact and RNG independent."""
     import surface_geodesic_cache as module
 
     args = inputs()
@@ -62,6 +77,7 @@ def test_cache_cold_warm_memory_exact_and_rng_independent(tmp_path, monkeypatch)
     "field", ["positions", "faces", "thickness", *OPTIONS, "algorithm"]
 )
 def test_cache_invalidates_every_physical_input_option_and_algorithm(tmp_path, field):
+    """Verify cache invalidates every physical input option and algorithm."""
     cache = SurfaceGeodesicCache(tmp_path)
     p, f, t, options = inputs()
     cache.get(p, f, t, options)
@@ -84,6 +100,7 @@ def test_cache_invalidates_every_physical_input_option_and_algorithm(tmp_path, f
     "damage", ["checksum", "metadata", "order", "bounds", "dtype", "partial"]
 )
 def test_corrupt_cache_fails_closed(tmp_path, damage):
+    """Verify corrupt cache fails closed."""
     import surface_geodesic_cache as module
 
     args = inputs()
@@ -111,6 +128,7 @@ def test_corrupt_cache_fails_closed(tmp_path, damage):
 
 
 def test_failed_publish_leaves_no_entry_or_temporary_file(tmp_path, monkeypatch):
+    """Verify failed publish leaves no entry or temporary file."""
     import surface_geodesic_cache as module
 
     def fail(*args, **kwargs):
@@ -123,6 +141,7 @@ def test_failed_publish_leaves_no_entry_or_temporary_file(tmp_path, monkeypatch)
 
 
 def test_pair_budget_failure_not_cached(tmp_path):
+    """Verify pair budget failure not cached."""
     p, f, t, options = inputs()
     options["max_pairs"] = 1
     with pytest.raises(RuntimeError, match="budget"):
@@ -131,6 +150,7 @@ def test_pair_budget_failure_not_cached(tmp_path):
 
 
 def test_lock_timeout_and_recovery(tmp_path):
+    """Verify lock timeout and recovery."""
     import fcntl
 
     args = inputs()
@@ -146,6 +166,7 @@ def test_lock_timeout_and_recovery(tmp_path):
 
 
 def test_cache_fingerprints_the_functional_not_the_no_grad_wrapper():
+    """Verify cache fingerprints the functional not the no grad wrapper."""
     import hashlib
 
     source = (
@@ -220,6 +241,7 @@ def _run_workers(target, arguments):
 
 
 def test_cache_concurrent_publish(tmp_path):
+    """Verify cache concurrent publish."""
     result = _run_workers(_cache_worker, [(str(tmp_path),)] * 2)
     assert sum(row[0]["computed"] for row in result) == 1
     assert sum(row[0]["disk_hits"] for row in result) == 1
@@ -228,6 +250,7 @@ def test_cache_concurrent_publish(tmp_path):
 
 @pytest.mark.parametrize("mode", ["slow", "failure-0", "failure-1"])
 def test_distributed_cpu_startup_and_error_propagation(tmp_path, mode):
+    """Verify distributed cpu startup and error propagation."""
     result = _run_workers(
         _startup_worker,
         [(rank, str(tmp_path / "rendezvous"), mode) for rank in range(2)],
@@ -241,6 +264,7 @@ def test_distributed_cpu_startup_and_error_propagation(tmp_path, mode):
 
 
 def test_serial_startup_and_invalid_timeouts():
+    """Verify serial startup and invalid timeouts."""
     assert initialize_datasets(lambda mode: mode) == "compute"
     for invalid in (0, -1, float("inf"), float("nan")):
         with pytest.raises(ValueError):
@@ -250,6 +274,7 @@ def test_serial_startup_and_invalid_timeouts():
 
 
 def test_validation_config_copy_preserves_interpolations_and_train_settings():
+    """Verify validation config copy preserves interpolations and train settings."""
     from copy import deepcopy
 
     from hydra import compose, initialize_config_dir

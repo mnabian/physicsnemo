@@ -1,5 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """One-ring exclusion ablation: topology, discovery, batching and live BPTT."""
 
@@ -28,6 +41,7 @@ from physicsnemo.nn.functional.neighbors.surface_contact import (  # noqa: E402
 
 def strip():
     # Five quads in one connected strip, and a separate triangular surface.
+    """Build a small material strip for one-ring exclusion tests."""
     faces = torch.tensor(
         [[2 * i, 2 * i + 2, 2 * i + 3, 2 * i + 1] for i in range(5)]
         + [[12, 13, 14, 14]]
@@ -40,6 +54,7 @@ def strip():
 
 
 def oracle(faces, num_nodes):
+    """Compute one-ring node-to-face exclusions with a direct test oracle."""
     cells = [set(f) for f in faces.tolist()]
     return {
         (n, f)
@@ -50,6 +65,7 @@ def oracle(faces, num_nodes):
 
 
 def test_exact_one_ring_not_whole_component():
+    """Verify exact one ring not whole component."""
     positions, faces = strip()
     pairs = surface_one_ring_exclusions(faces, len(positions))
     actual = set(map(tuple, pairs.T.tolist()))
@@ -79,6 +95,7 @@ def test_exact_one_ring_not_whole_component():
     ],
 )
 def test_reject_invalid_topology(faces, n):
+    """Verify reject invalid topology."""
     with pytest.raises(ValueError):
         surface_one_ring_exclusions(faces, n)
 
@@ -86,6 +103,7 @@ def test_reject_invalid_topology(faces, n):
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
 def test_filtered_discovery_matches_oracle_and_batch_isolation(device, implementation):
+    """Verify filtered discovery matches oracle and batch isolation."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     positions, faces = strip()
@@ -142,6 +160,7 @@ def test_filtered_discovery_matches_oracle_and_batch_isolation(device, implement
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
 def test_one_ring_bptt_checkpoint_equivalence(device, implementation):
+    """Verify one ring BPTT checkpoint equivalence."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     torch.manual_seed(721)
@@ -196,6 +215,7 @@ def test_one_ring_bptt_checkpoint_equivalence(device, implementation):
 
 
 def test_ablation_changes_only_exclusions():
+    """Verify ablation changes only exclusions."""
     with initialize_config_dir(config_dir=str(CRASH_DIR / "conf"), version_base="1.3"):
         new = compose(
             config_name="crash_deformer_contact_autoregressive",

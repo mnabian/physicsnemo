@@ -368,6 +368,7 @@ class InferenceWorker:
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     # Initialize distributed (one process per GPU via torchrun)
+    """Run distributed crash inference and write predicted VTP trajectories."""
     DistributedManager.initialize()
     dist = DistributedManager()
 

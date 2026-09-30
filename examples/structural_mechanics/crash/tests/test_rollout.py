@@ -38,6 +38,7 @@ def make_sample(
     Fo: int = 3,
     with_globals: bool = False,
 ) -> SimSample:
+    """Build a deterministic synthetic crash sample for rollout tests."""
     torch.manual_seed(0)
     coords = torch.randn(N, 3)
     features = torch.randn(N, F)
@@ -45,6 +46,8 @@ def make_sample(
     future = torch.randn(N, T - 1, Fo)
 
     class DummyGraph:
+        """Minimal mutable graph container for testing rollout integration."""
+
         pass
 
     graph = DummyGraph()
@@ -71,6 +74,7 @@ def make_sample(
 
 def make_data_stats() -> Dict[str, Dict[str, torch.Tensor]]:
     # Broadcastable stats: [1, 3]
+    """Return broadcastable identity statistics and global-feature metadata."""
     zeros = torch.zeros(1, 3)
     ones = torch.ones(1, 3)
     return {
@@ -97,6 +101,8 @@ def make_data_stats() -> Dict[str, Dict[str, torch.Tensor]]:
 @pytest.fixture(autouse=True)
 def stub_parent_classes(monkeypatch):
     # Stub Transolver.__init__ and Transolver.forward (for TransolverOneShot)
+    """Replace expensive model cores with deterministic rollout-test stubs."""
+
     def transolver_init(self, *args, **kwargs):
         torch.nn.Module.__init__(self)
 
@@ -235,6 +241,7 @@ def stub_parent_classes(monkeypatch):
     ],
 )
 def test_mesh_attention_one_shot_wrappers(model_cls):
+    """Verify mesh attention one shot wrappers."""
     N, T, F, Fo = 7, 6, 2, 5
     sample = make_sample(N=N, T=T, F=F, Fo=Fo, with_globals=True)
     model = model_cls(num_time_steps=T, output_dim=(T - 1) * Fo)
@@ -267,6 +274,7 @@ def test_mesh_attention_one_shot_wrappers(model_cls):
     ],
 )
 def test_mesh_attention_autoregressive_wrappers_integrate_velocity(model_cls):
+    """Verify mesh attention autoregressive wrappers integrate velocity."""
     N, T, Fo = 5, 4, 5
     sample = make_sample(N=N, T=T, F=0, Fo=Fo, with_globals=True)
     sample.global_features["velocity_x"] = torch.tensor(1.0)
@@ -294,6 +302,7 @@ def test_mesh_attention_autoregressive_wrappers_integrate_velocity(model_cls):
 
 
 def test_mesh_autoregressive_uses_two_frame_velocity_and_target_window_length():
+    """Verify mesh autoregressive uses two frame velocity and target window length."""
     N = 4
     sample = make_sample(N=N, T=3, F=0, Fo=3, with_globals=False)
     sample.node_features["coords"].zero_()
@@ -322,6 +331,7 @@ def test_mesh_autoregressive_uses_two_frame_velocity_and_target_window_length():
 
 
 def test_mesh_autoregressive_teacher_forces_training_but_not_eval():
+    """Verify mesh autoregressive teacher forces training but not eval."""
     N, T, Fo = 3, 4, 5
     sample = make_sample(N=N, T=T, F=0, Fo=Fo, with_globals=True)
     sample.node_features["coords"] = torch.zeros(N, 3)
@@ -358,6 +368,7 @@ def test_mesh_autoregressive_teacher_forces_training_but_not_eval():
 
 
 def test_mesh_autoregressive_parity_input_and_fixed_reference_edges():
+    """Verify mesh autoregressive parity input and fixed reference edges."""
     sample = make_sample(N=3, T=4, F=0, Fo=5, with_globals=True)
     sample.global_features["velocity_x"] = torch.tensor(1.0)
     sample.graph.edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
@@ -389,6 +400,7 @@ def test_mesh_autoregressive_parity_input_and_fixed_reference_edges():
 
 
 def test_mesh_autoregressive_position_velocity_state_omits_global_duplication():
+    """Verify mesh autoregressive position velocity state omits global duplication."""
     sample = make_sample(N=3, T=3, F=0, Fo=5, with_globals=True)
     model = rollout.MeshGeoFLAREAutoregressive(
         num_time_steps=3,
@@ -411,6 +423,7 @@ def test_mesh_autoregressive_position_velocity_state_omits_global_duplication():
 
 
 def test_mesh_autoregressive_returns_normalized_acceleration_supervision():
+    """Verify mesh autoregressive returns normalized acceleration supervision."""
     sample = make_sample(N=2, T=4, F=0, Fo=5, with_globals=True)
     sample.node_features["coords"].zero_()
     sample.node_target.zero_()
@@ -465,6 +478,7 @@ def test_mesh_autoregressive_returns_normalized_acceleration_supervision():
 
 
 def test_mesh_autoregressive_rejects_invalid_node_input_mode():
+    """Verify mesh autoregressive rejects invalid node input mode."""
     kwargs = {
         "num_time_steps": 2,
         "checkpoint_rollout": False,
@@ -479,6 +493,7 @@ def test_mesh_autoregressive_rejects_invalid_node_input_mode():
 
 
 def test_mesh_autoregressive_converts_bumper_velocity_to_mm_per_second():
+    """Verify mesh autoregressive converts bumper velocity to mm per second."""
     sample = make_sample(N=3, T=2, F=0, Fo=3, with_globals=True)
     sample.global_features["velocity_x"] = torch.tensor(-5.0)
     model = rollout.MeshTransolverAutoregressive(
@@ -499,6 +514,7 @@ def test_mesh_autoregressive_converts_bumper_velocity_to_mm_per_second():
 
 
 def test_mesh_autoregressive_keeps_contact_core_for_matched_ablation():
+    """Verify mesh autoregressive keeps contact core for matched ablation."""
     sample = make_sample(N=3, T=2, F=0, Fo=3, with_globals=True)
     model = rollout.MeshTransolverAutoregressive(
         num_time_steps=2,
@@ -518,6 +534,7 @@ def test_mesh_autoregressive_keeps_contact_core_for_matched_ablation():
 
 
 def test_mesh_autoregressive_applies_thickness_fallback_per_node():
+    """Verify mesh autoregressive applies thickness fallback per node."""
     sample = make_sample(N=3, T=2, F=0, Fo=3, with_globals=True)
     sample.graph.shell_thickness = torch.tensor([1.8, 0.0, 2.2])
     model = rollout.MeshTransolverAutoregressive(
@@ -536,6 +553,7 @@ def test_mesh_autoregressive_applies_thickness_fallback_per_node():
 
 
 def test_mesh_autoregressive_rebuilds_cylinder_contact_each_step():
+    """Verify mesh autoregressive rebuilds cylinder contact each step."""
     N, T = 4, 4
     sample = make_sample(N=N, T=T, F=0, Fo=3, with_globals=True)
     sample.node_features["coords"] = torch.tensor(
@@ -567,6 +585,7 @@ def test_mesh_autoregressive_rebuilds_cylinder_contact_each_step():
 
 
 def test_geotransolver_autoregressive_rollout_eval():
+    """Verify geotransolver autoregressive rollout eval."""
     N, T, F = 5, 4, 2
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()
@@ -581,6 +600,7 @@ def test_geotransolver_autoregressive_rollout_eval():
 
 
 def test_geotransolver_teacher_forces_training_but_not_eval():
+    """Verify geotransolver teacher forces training but not eval."""
     N, T, Fo = 3, 4, 5
     sample = make_sample(N=N, T=T, F=0, Fo=Fo, with_globals=True)
     sample.node_features["coords"] = torch.zeros(N, 3)
@@ -619,6 +639,7 @@ def test_geotransolver_teacher_forces_training_but_not_eval():
 
 
 def test_geotransolver_previous_coords_uses_target_length_for_tbptt():
+    """Verify geotransolver previous coords uses target length for TBPTT."""
     N, target_steps = 3, 2
     sample = make_sample(N=N, T=target_steps + 1, F=1)
     sample.node_features["coords"] = torch.zeros(N, 3)
@@ -645,6 +666,7 @@ def test_geotransolver_previous_coords_uses_target_length_for_tbptt():
 
 
 def test_geotransolver_time_conditional_rollout_eval():
+    """Verify geotransolver time conditional rollout eval."""
     N, T, F = 6, 5, 3
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()
@@ -657,6 +679,7 @@ def test_geotransolver_time_conditional_rollout_eval():
 
 
 def test_geotransolver_one_step_rollout_eval():
+    """Verify geotransolver one step rollout eval."""
     N, T, F = 7, 6, 1
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()
@@ -676,6 +699,7 @@ def test_geotransolver_one_step_rollout_eval():
     strict=True,
 )
 def test_meshgraphnet_autoregressive_rollout_eval():
+    """Verify meshgraphnet autoregressive rollout eval."""
     N, T, F = 4, 4, 2
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()
@@ -695,6 +719,7 @@ def test_meshgraphnet_autoregressive_rollout_eval():
     strict=True,
 )
 def test_meshgraphnet_time_conditional_rollout_eval():
+    """Verify meshgraphnet time conditional rollout eval."""
     N, T, F = 3, 5, 4
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()
@@ -712,6 +737,7 @@ def test_meshgraphnet_time_conditional_rollout_eval():
     strict=True,
 )
 def test_meshgraphnet_one_step_rollout_eval():
+    """Verify meshgraphnet one step rollout eval."""
     N, T, F = 8, 3, 0
     # allow zero features
     torch.manual_seed(0)
@@ -719,6 +745,8 @@ def test_meshgraphnet_one_step_rollout_eval():
     future = torch.randn(N, T - 1, 3)
 
     class DummyGraph:
+        """Minimal mutable graph container for testing rollout integration."""
+
         pass
 
     graph = DummyGraph()
@@ -743,6 +771,7 @@ def test_meshgraphnet_one_step_rollout_eval():
     strict=True,
 )
 def test_figconvunet_time_conditional_rollout_eval():
+    """Verify figconvunet time conditional rollout eval."""
     N, T, F = 6, 5, 3
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()
@@ -760,6 +789,7 @@ def test_figconvunet_time_conditional_rollout_eval():
     strict=True,
 )
 def test_figconvunet_one_step_rollout_eval():
+    """Verify figconvunet one step rollout eval."""
     N, T, F = 7, 6, 1
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()
@@ -779,6 +809,7 @@ def test_figconvunet_one_step_rollout_eval():
     strict=True,
 )
 def test_figconvunet_autoregressive_rollout_eval():
+    """Verify figconvunet autoregressive rollout eval."""
     N, T, F = 5, 4, 2
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()

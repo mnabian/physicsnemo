@@ -1038,7 +1038,12 @@ class MeshGeoTransolverAutoregressive(
 
 
 class MeshGeoFLAREAutoregressive(MeshGeoFLARE, _MeshAttentionAutoregressiveMixin):
-    """MeshGeoFLARE with closed-loop acceleration rollout and contact."""
+    """DeFormer with closed-loop acceleration integration and optional contact.
+
+    Keep the historical class name for saved checkpoints and Hydra targets.
+    The supported contact experiment selects the predictive ``surface`` backend;
+    legacy node/obstacle options remain for older configurations only.
+    """
 
     def __init__(
         self,

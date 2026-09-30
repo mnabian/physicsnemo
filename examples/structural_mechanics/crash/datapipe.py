@@ -71,6 +71,7 @@ class SimSample:
         self.target_series = target_series
 
     def to(self, device: torch.device):
+        """Move sample tensors without mutating the cached graph attribute store."""
         for k, v in self.node_features.items():
             self.node_features[k] = v.to(device)
         self.node_target = self.node_target.to(device)
@@ -87,6 +88,7 @@ class SimSample:
         return self
 
     def is_graph(self) -> bool:
+        """Return whether this sample carries structural graph connectivity."""
         return self.graph is not None
 
     def __repr__(self) -> str:
@@ -964,6 +966,7 @@ class CrashGraphDataset(CrashBaseDataset):
     # ----- graph-specific helpers (use _pyg_data / _pyg_utils so PyG loads only when used) -----
     @staticmethod
     def create_graph(src, dst, num_nodes: int, dtype=torch.long):
+        """Build coalesced bidirectional structural edges and node self-loops."""
         src = torch.as_tensor(src, dtype=dtype)
         dst = torch.as_tensor(dst, dtype=dtype)
         edge_index = torch.stack(
@@ -1010,6 +1013,7 @@ class CrashGraphDataset(CrashBaseDataset):
     @staticmethod
     def add_edge_features(data, pos: torch.Tensor):
         # data: PyG Data; pos: [N,3]
+        """Attach reference displacement and distance to each structural edge."""
         row, col = data.edge_index
         pos_t = torch.as_tensor(pos, dtype=torch.float32)
         disp = pos_t[row] - pos_t[col]  # [E,3]

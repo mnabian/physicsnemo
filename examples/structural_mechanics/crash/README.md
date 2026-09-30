@@ -30,6 +30,15 @@ the message-activation band, not a recovered solver-deck setting. Dataset paths
 and splits must be supplied by the user; no proprietary datasets or trained
 checkpoints are included.
 
+The code retains the historical names `MeshGeoFLARE` (reusable model) and
+`MeshGeoFLAREAutoregressive` (crash rollout wrapper) for checkpoint and Hydra
+compatibility. These implement the two **DeFormer** experiments above; the
+GeoFLARE baseline uses `GeoTransolverAutoregressive`. All three configs explicitly
+select original FLARE (`GALE_FA`), not FLARE++.
+Other hybrid classes, nearest-node/legacy contact backends, and analytic bumper
+obstacle options are compatibility interfaces, not alternative reference recipes.
+They are not used by the surface-contact experiment.
+
 ### Body-in-White Crash Modeling
 
 <p align="center">
@@ -69,6 +78,17 @@ pip install "nvidia-physicsnemo[gnns]"
 # or with uv:
 uv sync --extra gnns
 ```
+
+Reference-geodesic preprocessing also requires SciPy, declared in the existing
+`nn-extras` optional dependency group. Install that extra, or install SciPy
+directly in an existing graph-model environment:
+
+```bash
+pip install scipy
+```
+
+SciPy is loaded only when reference-geodesic preprocessing is called; unrelated
+models and contact geometry remain importable without it.
 
 ## Data Preprocessing
 

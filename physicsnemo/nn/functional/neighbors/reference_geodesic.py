@@ -1,5 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Static, gap-scaled exclusions using initial material-edge path distances."""
 
@@ -8,6 +21,17 @@ import math
 
 import numpy as np
 import torch
+
+from physicsnemo.core.version_check import OptionalImport
+
+# EXT-004: delay optional imports until this preprocessing feature is called.
+_scipy_sparse = OptionalImport(
+    "scipy.sparse",
+    package_hint=(
+        "reference_geodesic_exclusions requires SciPy. Install with "
+        "pip install 'nvidia-physicsnemo[nn-extras]' or pip install scipy."
+    ),
+)
 
 
 @torch.no_grad()
@@ -43,7 +67,7 @@ def reference_geodesic_exclusions(
     pair threshold. No dense N-by-N distances are allocated. A storage budget
     overflow raises; it never silently drops exclusions or contact pairs.
     """
-    from scipy.sparse import coo_matrix
+    coo_matrix = _scipy_sparse.coo_matrix
 
     if (
         reference_positions.device.type != "cpu"

@@ -1,6 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import os
 import sys
@@ -45,6 +57,7 @@ def test_sample_device_transfer_does_not_move_cached_graph():
 
 
 def test_sample_graph_transfer_preserves_values_and_metadata():
+    """Verify sample graph transfer preserves values and metadata."""
     Data = pytest.importorskip("torch_geometric.data").Data
     cached = Data(
         edge_index=torch.tensor([[0, 1], [1, 0]]),
@@ -62,6 +75,7 @@ def test_sample_graph_transfer_preserves_values_and_metadata():
 
 
 def test_static_thickness_supports_vtp_point_data_record():
+    """Verify static thickness supports VTP point data record."""
     thickness = np.array([1.8, 2.2], dtype=np.float32)
 
     loaded = CrashGraphDataset._get_static_feature(
@@ -72,6 +86,7 @@ def test_static_thickness_supports_vtp_point_data_record():
 
 
 def test_edge_stats_weight_every_sample_equally():
+    """Verify edge stats weight every sample equally."""
     dataset = CrashGraphDataset.__new__(CrashGraphDataset)
     dataset.num_samples = 2
     dataset.graphs = [
@@ -86,6 +101,7 @@ def test_edge_stats_weight_every_sample_equally():
 
 
 def test_global_features_use_train_distribution_stats():
+    """Verify global features use train distribution stats."""
     dataset = CrashGraphDataset.__new__(CrashGraphDataset)
     dataset.global_features_keys = ["velocity_x", "rwall_origin_y"]
     dataset.global_features = [
@@ -104,6 +120,7 @@ def test_global_features_use_train_distribution_stats():
 
 
 def test_graph_component_ids_are_contiguous():
+    """Verify graph component ids are contiguous."""
     edge_index = torch.tensor(
         [
             [0, 1, 2, 3, 4],
@@ -133,6 +150,7 @@ def _window_dataset(sample_type: str) -> CrashBaseDataset:
 
 
 def test_two_frame_full_rollout_uses_second_frame_as_current_state():
+    """Verify two frame full rollout uses second frame as current state."""
     dataset = _window_dataset("all_time_steps")
 
     inputs, target = dataset.build_xy(0, None)
@@ -145,6 +163,7 @@ def test_two_frame_full_rollout_uses_second_frame_as_current_state():
 
 
 def test_random_time_window_keeps_contiguous_two_frame_history(monkeypatch):
+    """Verify random time window keeps contiguous two frame history."""
     dataset = _window_dataset("random_time_window")
     monkeypatch.setattr(torch, "randint", lambda *args, **kwargs: torch.tensor([2]))
 

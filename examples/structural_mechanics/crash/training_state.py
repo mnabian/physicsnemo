@@ -1,5 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Per-rank random state for reproducible epoch-boundary crash restarts."""
 
@@ -31,6 +44,7 @@ def configure_deterministic_training(enabled):
 
 
 def capture_rng_state(generators=None):
+    """Capture Python, NumPy, Torch, CUDA, and named loader RNG states."""
     numpy_state = np.random.get_state()
     return {
         "python": random.getstate(),
@@ -44,6 +58,7 @@ def capture_rng_state(generators=None):
 
 
 def restore_rng_state(state, generators=None):
+    """Restore checkpoint RNG states and require matching loader generators."""
     random.setstate(state["python"])
     numpy_state = state["numpy"]
     np.random.set_state(
@@ -71,6 +86,7 @@ def gather_rng_states(generators=None):
 
 
 def restore_rank_rng(states, rank, world_size, generators=None):
+    """Restore this rank only after checking the saved distributed world size."""
     if len(states) != world_size or not 0 <= rank < world_size:
         raise ValueError("RNG checkpoint world size does not match this restart")
     restore_rng_state(states[rank], generators)

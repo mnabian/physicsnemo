@@ -34,6 +34,7 @@ Use overrides on the contact entry point rather than adding another preset:
 
 | Override | Effect |
 |---|---|
+| `model.include_position_features=true` | Add normalized current XYZ to DeFormer node inputs; automatically expand the input projection by three channels (default: `false`) |
 | `datapipe.contact_surface_exclusion=incidence` | Omit the optional geodesic filter |
 | `datapipe.contact_surface_exclusion=one_ring` | Use material one-ring exclusions |
 | `datapipe.contact_geodesic_gap_min=0.0` | Remove the reference recipe's explicit 5 mm gap floor |
@@ -45,6 +46,12 @@ BPTT window. The contact recipe retains its explicit deterministic sampling and
 contact-specific initialization settings; the no-contact entry point preserves
 its original recipe. A true no-contact architecture uses
 `crash_deformer_autoregressive`, not just the message-disable override.
+
+The XYZ switch works with either DeFormer entry point. Leave `functional_dim=4`
+and `node_input_mode=velocity` unchanged: these describe the base velocity/thickness
+inputs, and the wrapper prepends three position channels when enabled. Use the
+same setting for inference and separate checkpoints for each mode; the input
+projection shapes differ. Contact continues to use denormalized physical geometry.
 
 Print an entry point without starting training:
 

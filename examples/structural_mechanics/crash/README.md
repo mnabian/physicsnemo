@@ -233,13 +233,36 @@ not interchangeable checkpoints. Use separate output directories when launching
 comparisons concurrently, for example `hydra.run.dir=./outputs/deformer_contact`.
 
 The reference defaults assume 127 training cases, 8 validation cases, and 26
-frames spaced 5 ms apart. All models use velocity and thickness inputs, predict
-acceleration, and train with random four-transition closed-loop BPTT windows.
+frames spaced 5 ms apart. By default, all models use velocity and thickness inputs,
+predict acceleration, and train with random four-transition closed-loop BPTT windows.
 The two initial observed frames initialize velocity; validation and inference
 roll out the remaining 24 transitions. The common budget is 500 epochs with
 Muon, BF16, a cosine learning-rate schedule from `2e-4` to `1e-6`, and no
 teacher forcing or early stopping. Supply sample counts and time-step settings
 appropriate for a different dataset.
+
+DeFormer can optionally include current XYZ alongside velocity and thickness:
+
+```bash
+python train.py --config-name=crash_deformer_contact_autoregressive \
+  model.include_position_features=true \
+  training.raw_data_dir=/data/crash/train \
+  training.raw_data_dir_validation=/data/crash/validation
+```
+
+This switch defaults to `false` and also works with `crash_deformer_autoregressive`.
+When enabled, the input order is **normalized current XYZ, normalized velocity XYZ,
+normalized thickness**. The wrapper automatically expands the input projection
+from four to seven channels; leave `model.functional_dim=4` and
+`model.node_input_mode=velocity` unchanged. XYZ is the observed current position
+at initialization and the model's own predicted position during subsequent
+closed-loop steps, never a future target. Geometry context, physical-unit contact,
+and the residual velocity/position integration are unchanged.
+
+Use the same switch for training and inference, and a separate checkpoint/output
+directory for each mode: four- and seven-channel checkpoints are not interchangeable.
+Legacy explicit `node_input_mode=position_velocity` with `functional_dim=7`
+remains supported with the new switch disabled; do not combine both mechanisms.
 
 The contact recipe requires valid triangle/quad connectivity and nodal shell
 thickness in physical units (mm for the reference data). It rebuilds live

@@ -34,6 +34,9 @@ mesh_context_fusion: pre_post
 mesh_context_use_global: false
 
 node_input_mode: velocity
+# Opt in with model.include_position_features=true. The wrapper prepends current
+# normalized XYZ and expands functional_dim by 3; leave functional_dim unchanged.
+include_position_features: false
 
 # The contact experiment enables the contact block and surface graph explicitly.
 use_contact: false

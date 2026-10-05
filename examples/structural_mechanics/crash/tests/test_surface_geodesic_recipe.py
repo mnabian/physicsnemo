@@ -182,8 +182,9 @@ def test_datapipe_uses_physical_initial_geometry_and_content_safe_cache(tmp_path
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
+@pytest.mark.parametrize("include_position_features", [False, True])
 def test_geodesic_filter_preserves_bptt_and_checkpoint_gradients(
-    device, implementation
+    device, implementation, include_position_features
 ):
     """Verify geodesic filter preserves BPTT and checkpoint gradients."""
     if device == "cuda" and not torch.cuda.is_available():
@@ -191,6 +192,7 @@ def test_geodesic_filter_preserves_bptt_and_checkpoint_gradients(
     torch.manual_seed(721)
     model = (
         make_model(
+            include_position_features=include_position_features,
             contact_graph_backend="surface",
             contact_search_implementation=implementation,
             contact_activation_distance=5.0,
@@ -225,6 +227,10 @@ def test_geodesic_filter_preserves_bptt_and_checkpoint_gradients(
     actual[:, -1].square().sum().backward()
     expected[:, -1].square().sum().backward()
     assert len(seen) == 3
+    if include_position_features:
+        xyz_weight_grad = model.preprocess[0].layers[0].weight.grad[:, :3]
+        assert torch.isfinite(xyz_weight_grad).all()
+        assert xyz_weight_grad.abs().sum() > 0
     for key in ("coords", "previous_coords"):
         grad = sample.node_features[key].grad
         assert torch.isfinite(grad).all() and grad.abs().sum() > 0

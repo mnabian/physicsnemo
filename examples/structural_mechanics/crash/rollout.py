@@ -1043,6 +1043,13 @@ class MeshGeoFLAREAutoregressive(MeshGeoFLARE, _MeshAttentionAutoregressiveMixin
     Keep the historical class name for saved checkpoints and Hydra targets.
     The supported contact experiment selects the predictive ``surface`` backend;
     legacy node/obstacle options remain for older configurations only.
+
+    ``include_position_features=True`` opts the ``velocity`` input mode into
+    normalized current XYZ features. ``functional_dim`` (or ``input_dim_nodes``)
+    still describes velocity plus static features; the wrapper adds three input
+    channels and selects ``position_velocity`` automatically. Do not also change
+    the width or input mode. The default leaves existing models/checkpoints
+    unchanged, including legacy explicit position-input configurations.
     """
 
     def __init__(
@@ -1079,8 +1086,31 @@ class MeshGeoFLAREAutoregressive(MeshGeoFLARE, _MeshAttentionAutoregressiveMixin
         contact_normal_epsilon: float | None = None,
         contact_activation_distance: float | None = None,
         contact_prune_zero_weight: bool = False,
+        include_position_features: bool = False,
         **kwargs,
     ) -> None:
+        if not isinstance(include_position_features, bool):
+            raise ValueError("include_position_features must be a bool")
+        if include_position_features:
+            if node_input_mode != "velocity":
+                raise ValueError(
+                    "include_position_features=True requires node_input_mode='velocity'; "
+                    "it selects position_velocity automatically"
+                )
+            functional_dim = self._resolve_alias(
+                kwargs.get("functional_dim"),
+                kwargs.get("input_dim_nodes"),
+                "functional_dim",
+                "input_dim_nodes",
+            )
+            if type(functional_dim) is not int or functional_dim < 3:
+                raise ValueError(
+                    "include_position_features requires functional_dim (or "
+                    "input_dim_nodes) to count velocity plus static features (>=3)"
+                )
+            kwargs["functional_dim"] = functional_dim + 3
+            kwargs.pop("input_dim_nodes", None)
+            node_input_mode = "position_velocity"
         _configure_contact_core(kwargs, enable_contact)
         contact_surface_max_pairs = kwargs.pop("contact_surface_max_pairs", 2_000_000)
         contact_surface_predictive = kwargs.pop("contact_surface_predictive", False)
@@ -1095,6 +1125,7 @@ class MeshGeoFLAREAutoregressive(MeshGeoFLARE, _MeshAttentionAutoregressiveMixin
                 f"contact_dim must be {feature_dim} for this recipe's contact features"
             )
         super().__init__(**kwargs)
+        self.include_position_features = include_position_features
         self._configure_autoregressive(
             num_time_steps=num_time_steps,
             dt=dt,

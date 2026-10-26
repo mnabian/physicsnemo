@@ -340,6 +340,35 @@ def test_anchor_block_against_explicit_softmax_equation():
     torch.testing.assert_close(result, masked[:, 5:], rtol=1e-12, atol=1e-12)
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_rotary_mixed_precision_matches_float32_complex_rotation(dtype, device):
+    """RoPE rounds the completed rotation, not its trigonometric factors."""
+    block = _AnchorBlock(192, 3, 4).to(device)
+    features = (
+        torch.linspace(-4, 4, 2 * 3 * 5 * 64, device=device)
+        .reshape(2, 3, 5, 64)
+        .to(dtype)
+        .requires_grad_()
+    )
+    positions = torch.linspace(-1000, 1000, 2 * 5 * 3, device=device).reshape(2, 5, 3)
+    # Complex multiplication supplies an independent reference for each planar
+    # rotation. Four channels per head are outside the three rotary axes.
+    pairs = torch.view_as_complex(features[..., :60].float().reshape(2, 3, 5, 3, 10, 2))
+    phase = positions[:, None, :, :, None] * block.frequencies
+    reference = pairs * torch.complex(phase.cos(), phase.sin())
+    reference = torch.cat(
+        (torch.view_as_real(reference).flatten(-3).to(dtype), features[..., 60:]),
+        dim=-1,
+    )
+    with torch.autocast(device_type=torch.device(device).type, dtype=dtype):
+        result = block._rotate(features, positions)
+    assert result.dtype == dtype
+    torch.testing.assert_close(result, reference, rtol=0, atol=0)
+    actual_grad = torch.autograd.grad(result.float().square().mean(), features)[0]
+    expected_grad = torch.autograd.grad(reference.float().square().mean(), features)[0]
+    torch.testing.assert_close(actual_grad, expected_grad, rtol=0, atol=0)
+
+
 def test_pooling_chunk_independence_empty_neighbors_and_coordinate_gradients():
     model = ABUPT(**SMALL).double()
     args = inputs(dtype=torch.float64)

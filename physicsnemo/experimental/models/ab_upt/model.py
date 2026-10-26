@@ -115,17 +115,26 @@ class _AnchorBlock(nn.Module):
         # unchanged when the head width is not divisible by six.
         pairs = self.frequencies.numel()
         rotary_width = 6 * pairs
-        dtype = torch.float64 if positions.dtype == torch.float64 else torch.float32
+        dtype = (
+            torch.float64
+            if torch.float64 in (positions.dtype, features.dtype)
+            else torch.float32
+        )
         phase = positions.to(dtype).unsqueeze(1).unsqueeze(-1) * self.frequencies.to(
             dtype
         )
-        cosine, sine = phase.cos().to(features.dtype), phase.sin().to(features.dtype)
-        rotated = features[..., :rotary_width].unflatten(-1, (3, pairs, 2))
+        # Keep the rotation arithmetic, not just its phases, in fp32 (paper
+        # Appendix A.6). Round once at the end to retain the attention dtype.
+        cosine, sine = phase.cos(), phase.sin()
+        rotated = features[..., :rotary_width].to(dtype).unflatten(-1, (3, pairs, 2))
         even, odd = rotated.unbind(-1)
         rotated = torch.stack(
             (even * cosine - odd * sine, even * sine + odd * cosine), -1
         )
-        return torch.cat((rotated.flatten(-3), features[..., rotary_width:]), dim=-1)
+        return torch.cat(
+            (rotated.flatten(-3).to(features.dtype), features[..., rotary_width:]),
+            dim=-1,
+        )
 
     def _key_value(self, features: Tensor, positions: Tensor) -> _KV:
         kv = self.key_value(self.context_norm(features))

@@ -61,6 +61,13 @@ class ABUPTRecipe(Module):
     training autograd graph. This DrivAerML adapter predicts velocity,
     pressure, and eddy viscosity in the volume, rather than the paper's
     velocity/pressure/vorticity channel layout.
+
+    ``train_on_anchors`` uses the paper's anchor-supervised training path.
+    Training queries must then equal the anchors, in the same order, so the
+    returned predictions remain aligned with recipe targets. Evaluation
+    always supports independent queries. ``parameter_scale`` divides the
+    freestream velocity supplied to the operator without changing metadata
+    used for nondimensionalization or force calculations.
     """
 
     def __init__(
@@ -76,6 +83,8 @@ class ABUPTRecipe(Module):
         pooling_radius: float = 0.25,
         pooling_chunk_size: int = 4096,
         radius_search_backend: str | None = None,
+        train_on_anchors: bool = False,
+        parameter_scale: float = 1.0,
     ):
         super().__init__()
         surface, volume = _modes(mode)
@@ -87,7 +96,17 @@ class ABUPTRecipe(Module):
             raise ValueError("query_chunk_size must be a positive integer")
         if not math.isfinite(coordinate_scale) or coordinate_scale <= 0:
             raise ValueError("coordinate_scale must be finite and positive")
+        if not isinstance(train_on_anchors, bool):
+            raise ValueError("train_on_anchors must be a boolean")
+        if (
+            isinstance(parameter_scale, bool)
+            or not math.isfinite(parameter_scale)
+            or parameter_scale <= 0
+        ):
+            raise ValueError("parameter_scale must be finite and positive")
         self.coordinate_scale = coordinate_scale
+        self.train_on_anchors = train_on_anchors
+        self.parameter_scale = parameter_scale
         self.mode = mode
         self.query_chunk_size = query_chunk_size
         self.operator = ABUPT(
@@ -108,8 +127,10 @@ class ABUPTRecipe(Module):
     def get_extra_state(self):
         """Persist settings that change predictions but not weight shapes."""
         return {
-            "version": 1,
+            "version": 2,
             "coordinate_scale": self.coordinate_scale,
+            "train_on_anchors": self.train_on_anchors,
+            "parameter_scale": self.parameter_scale,
             "pooling_radius": self.operator.pooling_radius,
             "num_heads": self.operator.num_heads,
             "cross_branch": list(self.operator.cross_branch),
@@ -118,6 +139,11 @@ class ABUPTRecipe(Module):
     def set_extra_state(self, state):
         """Reject numerically incompatible resume/inference configurations."""
         expected = self.get_extra_state()
+        if isinstance(state, dict) and state.get("version") == 1:
+            # Older checkpoints used only independent-query training and raw
+            # freestream velocity. Retain those semantics when loading them.
+            state = dict(state)
+            state.update(version=2, train_on_anchors=False, parameter_scale=1.0)
         if not isinstance(state, dict) or state != expected:
             raise ValueError(
                 "AB-UPT checkpoint settings do not match the current model: "
@@ -147,11 +173,23 @@ class ABUPTRecipe(Module):
             ("volume", self.operator.volume_channels, volume_queries, VOLUME_TARGETS),
         )
         # Reject invalid branch contracts before building the geometry graph.
+        anchors = {"surface": surface_anchors, "volume": volume_anchors}
         for field, enabled, queries, _ in branches:
             if enabled and queries is None:
                 raise ValueError(f"Explicit {field}_queries are required by the recipe")
             if not enabled and queries is not None:
                 raise ValueError(f"Queries supplied for disabled {field} head")
+            if enabled and self.training and self.train_on_anchors:
+                positions = anchors[field]
+                if (
+                    positions is None
+                    or queries.shape != positions.shape
+                    or not torch.equal(queries, positions)
+                ):
+                    raise ValueError(
+                        f"Anchor-supervised training requires {field}_queries to "
+                        f"equal {field}_anchors in shape, coordinates, and order"
+                    )
         if parameters is None:
             raise ValueError("Freestream parameters are required by the recipe")
         if parameters.ndim == 3 and parameters.shape[1] == 1:
@@ -170,22 +208,27 @@ class ABUPTRecipe(Module):
             volume_anchors.to(dtype=model_dtype) * self.coordinate_scale
             if volume_anchors is not None
             else None,
-            parameters.to(dtype=model_dtype),
+            parameters.to(dtype=model_dtype) / self.parameter_scale,
         )
         output = TensorDict({}, batch_size=[geometry.shape[0]], device=geometry.device)
         for field, enabled, queries, targets in branches:
             if not enabled:
                 continue
-            chunks = queries.split(self.query_chunk_size, dim=1)
-            prediction = torch.cat(
-                [
-                    self.operator.decode_queries(
-                        q.to(dtype=model_dtype) * self.coordinate_scale, context, field
-                    )
-                    for q in chunks
-                ],
-                dim=1,
-            )
+            if self.training and self.train_on_anchors:
+                prediction = getattr(context, f"{field}_predictions")
+            else:
+                chunks = queries.split(self.query_chunk_size, dim=1)
+                prediction = torch.cat(
+                    [
+                        self.operator.decode_queries(
+                            q.to(dtype=model_dtype) * self.coordinate_scale,
+                            context,
+                            field,
+                        )
+                        for q in chunks
+                    ],
+                    dim=1,
+                )
             branch = split_concat_by_target(prediction, targets)
             for name in targets:
                 key = as_nested_key(name)
@@ -209,6 +252,9 @@ class ABUPTDomainReader(DomainMeshReader):
     Counts above the available size use all locations without replacement.
     Surface integration measures use inverse inclusion probabilities; sampled
     force integrals are Monte Carlo estimates, not full-surface integrals.
+    With ``queries_at_anchors=True``, query positions and labels use the exact
+    anchor indices; the query counts are ignored in favor of the anchor counts.
+    Set this option to False for independent-query or full-mesh evaluation.
     """
 
     def __init__(
@@ -224,9 +270,13 @@ class ABUPTDomainReader(DomainMeshReader):
         surface_queries=16384,
         volume_queries=16384,
         pin_memory=False,
+        queries_at_anchors=False,
     ):
         super().__init__(path, pattern=pattern, pin_memory=pin_memory)
         self.surface, self.volume = _modes(mode)
+        if not isinstance(queries_at_anchors, bool):
+            raise ValueError("queries_at_anchors must be a boolean")
+        self.queries_at_anchors = queries_at_anchors
         for name, count in (
             ("geometry_points", geometry_points),
             ("num_supernodes", num_supernodes),
@@ -280,7 +330,11 @@ class ABUPTDomainReader(DomainMeshReader):
         }
         if self.surface:
             sa = self._indices(vehicle.n_cells, self.num_surface_anchors, index, 2)
-            sq = self._indices(vehicle.n_cells, self.surface_queries, index, 4)
+            sq = (
+                sa
+                if self.queries_at_anchors
+                else self._indices(vehicle.n_cells, self.surface_queries, index, 4)
+            )
 
             def centroids(ids):
                 return vehicle.points[vehicle.cells[ids].long()].mean(dim=1)
@@ -314,7 +368,11 @@ class ABUPTDomainReader(DomainMeshReader):
         sampled_interior = Mesh(points=geometry.new_empty((0, 3)))
         if self.volume:
             va = self._indices(interior.n_points, self.num_volume_anchors, index, 3)
-            vq = self._indices(interior.n_points, self.volume_queries, index, 5)
+            vq = (
+                va
+                if self.queries_at_anchors
+                else self._indices(interior.n_points, self.volume_queries, index, 5)
+            )
             volume_data = TensorDict({}, [len(vq)])
             for src, dst in (
                 ("UMeanTrim", "volume.velocity"),

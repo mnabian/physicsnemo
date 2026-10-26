@@ -942,3 +942,59 @@ force integration uses the aligned `vehicle` triangles. For sampled surfaces,
 inverse-inclusion-probability measures produce Monte Carlo force estimates;
 full-surface queries avoid that sampling error. Checkpointing and resume use
 the recipe's standard optimizer, scheduler, and `.mdlus` mechanisms.
+
+### Anchor supervision and accuracy experiments
+
+Set `+model.train_on_anchors=true` together with
+`+dataset_reader_overrides.queries_at_anchors=true` to supervise predictions at
+anchor locations, as in the paper's baseline experiment. The reader gathers
+labels at those exact anchors; separate query counts are ignored in this mode.
+The adapter rejects mismatched training coordinates or ordering. Validation and
+inference still use query decoding. Set the reader flag to `false` for
+independent-query or full-surface evaluation; retain the model flag when loading
+that checkpoint.
+
+`+model.parameter_scale=40.0` divides freestream conditioning by 40 before the
+operator consumes it. The default is 1.0. This is an optional scaling experiment,
+not a paper-prescribed value: it does not alter the physical metadata used to
+normalize fields or calculate forces. Replay the same scale at inference.
+
+An explicit `training.optimizer._target_` selects a Hydra optimizer; omitting it
+retains Muon/AdamW. For example, the following uses Lion, MSE, norm clipping,
+EMA, and per-update warmup/cosine scheduling. The step counts assume **435
+training cases, one process, batch size 1, and 500 epochs**. Recalculate both
+counts from the actual number of optimizer updates when changing the split or
+world size. Batch size 1 per DDP rank gives a larger global batch.
+
+```bash
+python src/train.py model=ab_upt_surface dataset=drivaer_ml_ab_upt_surface \
+    run_id=anchor_surface precision=float16 training.loss_type=mse \
+    +model.train_on_anchors=true +model.parameter_scale=40.0 \
+    +dataset_reader_overrides.queries_at_anchors=true \
+    +training.optimizer._target_=optimization.Lion \
+    '~training.optimizer.eps' 'training.optimizer.betas=[0.9,0.99]' \
+    training.optimizer.lr=5e-5 training.optimizer.weight_decay=0.05 \
+    +training.grad_clip_norm=1.0 +training.ema_decay=0.9999 \
+    training.scheduler_update_mode=step \
+    training.scheduler._target_=optimization.WarmupCosine \
+    '~training.scheduler.step_size' '~training.scheduler.gamma' \
+    +training.scheduler.total_steps=217500 \
+    +training.scheduler.warmup_steps=10875 +training.scheduler.min_lr=1e-6
+```
+
+Remove inherited optimizer/scheduler arguments as shown: Lion does not accept
+AdamW's `eps`, and `WarmupCosine` does not accept StepLR's `step_size` or `gamma`.
+The normal checkpoint retains raw model, optimizer, scheduler, and EMA state for
+resume. The adjacent `checkpoints/ema/` directory holds inference weights and
+normalization statistics; select it with
+`checkpoint_path=runs/anchor_surface/checkpoints/ema`. EMA validation records
+use the `ema_val_*` phases, while raw validation remains separately logged.
+Metrics during training are in the dataset's transformed field space; use
+physical-unit inference metrics when comparing different normalizations.
+
+These options do not by themselves reproduce the paper: its target
+standardization, coordinate convention, vorticity outputs, train/test split,
+and repeated-seed evaluation differ from this integration. Pooling radius and
+conditioning scale remain experiment settings that require real-mesh
+qualification. Compare accuracy on the same split, fields, and evaluation
+protocol, and record all overrides.

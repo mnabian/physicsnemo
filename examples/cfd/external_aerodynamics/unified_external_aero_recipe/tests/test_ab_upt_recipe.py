@@ -454,6 +454,8 @@ def test_adapter_accepts_mixed_native_dtypes_without_changing_inputs(
         {"pooling_radius": 0.5},
         {"num_heads": 4},
         {"num_interaction_blocks": 0, "num_shared_layers": 3},
+        {"train_on_anchors": True},
+        {"parameter_scale": 40.0},
     ],
 )
 def test_production_checkpoint_load_rejects_changed_numerics(tmp_path, override):
@@ -491,3 +493,146 @@ def test_production_checkpoint_load_allows_decode_tuning(tmp_path):
     expected, actual = source(**args), destination(**args)
     for key, value in expected.items(include_nested=True, leaves_only=True):
         torch.testing.assert_close(actual[key], value, rtol=2e-5, atol=2e-6)
+
+
+@pytest.mark.parametrize("mode", ["surface", "volume", "joint"])
+def test_anchor_supervision_aligns_labels_and_keeps_independent_evaluation(
+    native_case, mode, monkeypatch
+):
+    """Anchor training gathers matching labels; eval accepts arbitrary queries."""
+    root, original = native_case
+    cfg, ds, dataset = pipeline(root, mode)
+    dataset.reader.queries_at_anchors = True
+    raw, _ = dataset.reader[0]
+    for field, enabled, query_mesh, original_mesh in (
+        (
+            "surface",
+            mode != "volume",
+            raw.boundaries.get("abupt_surface"),
+            original.boundaries["vehicle"],
+        ),
+        ("volume", mode != "surface", raw.interior, original.interior),
+    ):
+        if not enabled:
+            continue
+        torch.testing.assert_close(
+            query_mesh.points, raw.boundaries[f"abupt_{field}_anchors"].points
+        )
+        source_points = (
+            original_mesh.cell_centroids if field == "surface" else original_mesh.points
+        )
+        source_data = (
+            original_mesh.cell_data if field == "surface" else original_mesh.point_data
+        )
+        nearest = torch.cdist(query_mesh.points, source_points).argmin(dim=1)
+        torch.testing.assert_close(query_mesh.points, source_points[nearest])
+        torch.testing.assert_close(
+            query_mesh.point_data[field, "pressure"], source_data["pMeanTrim"][nearest]
+        )
+    collate = build_collate_fn(
+        "tensors",
+        OmegaConf.to_container(cfg.forward_kwargs),
+        OmegaConf.to_container(ds.targets),
+        OmegaConf.to_container(ds.target_sources),
+    )
+    batch = collate([dataset[0]])
+    model = ABUPTRecipe(mode=mode, train_on_anchors=True, **SMALL)
+    decode_queries = model.operator.decode_queries
+
+    def unexpected_query_decode(*args, **kwargs):
+        pytest.fail("Anchor training must not evaluate a separate query stream")
+
+    monkeypatch.setattr(model.operator, "decode_queries", unexpected_query_decode)
+    prediction = model(**batch["forward_kwargs"])
+    loss, _ = LossCalculator(OmegaConf.to_container(ds.targets), loss_type="mse")(
+        prediction, batch["targets"]
+    )
+    loss.backward()
+    assert torch.isfinite(loss)
+    for name, parameter in model.named_parameters():
+        assert parameter.grad is not None and torch.isfinite(parameter.grad).all(), name
+    # Equal-size permutations must fail too: shape checks alone miss label swaps.
+    field = "surface" if mode != "volume" else "volume"
+    bad = dict(batch["forward_kwargs"])
+    bad[f"{field}_queries"] = bad[f"{field}_queries"].flip(1)
+    with pytest.raises(ValueError, match="coordinates, and order"):
+        model(**bad)
+    bad[f"{field}_queries"] = bad[f"{field}_queries"][:, :-1]
+    with pytest.raises(ValueError, match="coordinates, and order"):
+        model(**bad)
+    monkeypatch.setattr(model.operator, "decode_queries", decode_queries)
+    model.eval()
+    dataset.reader.queries_at_anchors = False
+    independent = collate([dataset[0]])
+    with torch.no_grad():
+        actual = model(**independent["forward_kwargs"])
+    for key, value in actual.items(include_nested=True, leaves_only=True):
+        assert value.shape == independent["targets"][key].shape
+        assert value.shape[1] == (11 if key[0] == "surface" else 13)
+    # Full-surface evaluation is not constrained by the training anchor count.
+    if mode != "volume":
+        dataset.reader.surface_queries = None
+        full = collate([dataset[0]])
+        with torch.no_grad():
+            actual = model(**full["forward_kwargs"])
+        assert (
+            actual["surface", "pressure"].shape[1]
+            == original.boundaries["vehicle"].n_cells
+        )
+    dataset.close()
+
+
+def test_parameter_scaling_matches_explicit_unit_conversion(tmp_path):
+    """Only operator conditioning changes; metadata and query outputs stay intact."""
+    torch.manual_seed(701)
+    scaled = ABUPTRecipe(**SMALL, parameter_scale=40.0, train_on_anchors=True).eval()
+    unit = ABUPTRecipe(**SMALL).eval()
+    unit.operator.load_state_dict(scaled.operator.state_dict())
+    args = {
+        name: torch.rand(1, count, 3)
+        for name, count in (
+            ("geometry", 19),
+            ("supernodes", 5),
+            ("surface_anchors", 7),
+            ("volume_anchors", 9),
+            ("surface_queries", 11),
+            ("volume_queries", 13),
+        )
+    }
+    parameters = torch.tensor([[[40.0, 2.0, 0.0]]], requires_grad=True)
+    original = parameters.detach().clone()
+    actual = scaled(**args, parameters=parameters)
+    expected = unit(**args, parameters=parameters / 40.0)
+    for key, value in actual.items(include_nested=True, leaves_only=True):
+        torch.testing.assert_close(value, expected[key])
+    sum(v.square().mean() for v in actual.values(True, True)).backward()
+    assert parameters.grad is not None and torch.isfinite(parameters.grad).all()
+    torch.testing.assert_close(parameters.detach(), original)
+    path = tmp_path / "scaled-anchor-training.mdlus"
+    scaled.save(str(path))
+    restored = Module.from_checkpoint(str(path)).eval()
+    assert restored.parameter_scale == 40.0 and restored.train_on_anchors
+    result = restored(**args, parameters=parameters.detach())
+    for key, value in actual.items(include_nested=True, leaves_only=True):
+        torch.testing.assert_close(result[key], value)
+
+
+def test_legacy_adapter_state_preserves_raw_conditioning_and_query_training():
+    """Version-one checkpoints load only under their original numerical settings."""
+    original = ABUPTRecipe(**SMALL)
+    state = original.state_dict()
+    legacy = dict(state["_extra_state"])
+    legacy["version"] = 1
+    del legacy["parameter_scale"], legacy["train_on_anchors"]
+    state["_extra_state"] = legacy
+    ABUPTRecipe(**SMALL).load_state_dict(state)
+    for options in ({"parameter_scale": 40.0}, {"train_on_anchors": True}):
+        with pytest.raises(ValueError, match="checkpoint settings"):
+            ABUPTRecipe(**SMALL, **options).load_state_dict(state)
+
+
+@pytest.mark.parametrize("scale", [0, -1, float("nan"), float("inf"), True])
+def test_parameter_scale_validation(scale):
+    """Reject nonpositive, nonfinite, and boolean conditioning scales."""
+    with pytest.raises(ValueError, match="parameter_scale"):
+        ABUPTRecipe(**SMALL, parameter_scale=scale)

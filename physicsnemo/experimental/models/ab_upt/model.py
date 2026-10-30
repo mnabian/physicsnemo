@@ -190,6 +190,11 @@ class ABUPT(Module):
         ``None`` selects Warp on CUDA and PyTorch otherwise. Neighbor search
         is discrete; message passing remains differentiable in coordinates.
         Warp searches in float32; the PyTorch backend preserves float64 inputs.
+    pooling_message_fp32 : bool, optional, default=False
+        Disable autocast for the geometry message MLP to reduce sensitivity
+        to pooling chunk size. Requires float32 message weights under AMP;
+        explicit float64 models retain double precision. This is an optional
+        numerical variant, not a precision setting specified by the paper.
 
     Forward
     -------
@@ -267,6 +272,7 @@ class ABUPT(Module):
         pooling_chunk_size: int = 4096,
         parameter_channels: int = 0,
         radius_search_backend: Literal["torch", "warp"] | None = None,
+        pooling_message_fp32: bool = False,
     ):
         super().__init__(
             meta=ModelMetaData(
@@ -304,6 +310,9 @@ class ABUPT(Module):
             raise ValueError("pooling_radius must be finite and positive")
         if radius_search_backend not in (None, "torch", "warp"):
             raise ValueError("radius_search_backend must be None, 'torch', or 'warp'")
+        if not isinstance(pooling_message_fp32, bool):
+            raise ValueError("pooling_message_fp32 must be a bool")
+        self.pooling_message_fp32 = pooling_message_fp32
         self.pooling_radius = pooling_radius
         self.radius_search_backend = radius_search_backend
         self.position = _Coordinates(hidden_dim)
@@ -388,6 +397,14 @@ class ABUPT(Module):
         accumulation_dtype = (
             torch.float64 if geometry.dtype == torch.float64 else torch.float32
         )
+        if self.pooling_message_fp32 and any(
+            p.dtype != accumulation_dtype for p in self.message.parameters()
+        ):
+            raise ValueError(
+                "pooling_message_fp32 requires float32 message weights "
+                "(float64 for float64 coordinates); use autocast instead of "
+                "converting model weights to float16 or bfloat16"
+            )
         search_dtype = accumulation_dtype if backend == "torch" else torch.float32
         pooled = torch.zeros(
             batch * count,
@@ -419,11 +436,14 @@ class ABUPT(Module):
                     b, q, p = chunk.long().unbind(0)
                     q, p = q + q_start, p + p_start
                     relative = geometry[b, p] - supernodes[b, q]
-                    message = self.message(
-                        torch.cat(
-                            (relative, relative.norm(dim=-1, keepdim=True)), dim=-1
-                        )
+                    message_input = torch.cat(
+                        (relative, relative.norm(dim=-1, keepdim=True)), dim=-1
                     )
+                    if self.pooling_message_fp32:
+                        with torch.autocast(geometry.device.type, enabled=False):
+                            message = self.message(message_input.to(accumulation_dtype))
+                    else:
+                        message = self.message(message_input)
                     ids = b * count + q
                     pooled = pooled.index_add(0, ids, message.to(pooled.dtype))
                     counts.index_add_(0, ids, counts.new_ones(ids.shape[0], 1))

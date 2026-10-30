@@ -44,6 +44,7 @@ model:
   num_decoder_layers: 6
   pooling_radius: 0.25
   pooling_chunk_size: 4096
+  pooling_message_fp32: false
   query_chunk_size: 4096
   coordinate_scale: 1000.0
   radius_search_backend: null

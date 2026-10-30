@@ -68,6 +68,8 @@ class ABUPTRecipe(Module):
     always supports independent queries. ``parameter_scale`` divides the
     freestream velocity supplied to the operator without changing metadata
     used for nondimensionalization or force calculations.
+    ``pooling_message_fp32`` computes geometry messages with FP32 model weights
+    outside autocast; attention continues to follow the recipe precision.
     """
 
     def __init__(
@@ -85,6 +87,7 @@ class ABUPTRecipe(Module):
         radius_search_backend: str | None = None,
         train_on_anchors: bool = False,
         parameter_scale: float = 1.0,
+        pooling_message_fp32: bool = False,
     ):
         super().__init__()
         surface, volume = _modes(mode)
@@ -119,6 +122,7 @@ class ABUPTRecipe(Module):
             num_decoder_layers=num_decoder_layers,
             pooling_radius=pooling_radius * coordinate_scale,
             pooling_chunk_size=pooling_chunk_size,
+            pooling_message_fp32=pooling_message_fp32,
             parameter_channels=3,
             radius_search_backend=radius_search_backend,
         )
@@ -149,7 +153,8 @@ class ABUPTRecipe(Module):
                 "AB-UPT checkpoint settings do not match the current model: "
                 f"checkpoint={state!r}, current={expected!r}. "
                 "Use the model settings from the training run's resolved_config.yaml. "
-                "Query/pooling chunk sizes and search backend may be changed."
+                "Query/pooling chunk sizes, pooling message precision, and search "
+                "backend may be changed."
             )
 
     def forward(

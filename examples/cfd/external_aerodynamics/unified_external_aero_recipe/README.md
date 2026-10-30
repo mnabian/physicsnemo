@@ -920,7 +920,9 @@ Inference uses the same mode, dataset, and numerical model settings as training.
 Replay any architecture, `coordinate_scale`, or `pooling_radius` overrides from
 `resolved_config.yaml`. Checkpoint loading rejects incompatible numerical
 settings even when tensor shapes match. Query counts, query/pooling chunk sizes,
-and radius-search backend can be tuned independently. This checkpoint contract
+message precision, and radius-search backend can be tuned independently. Record
+these execution settings when continuing a run: changes in precision and pooling
+chunk size can change floating-point rounding. This checkpoint contract
 adds extra state; checkpoints from earlier drafts of this AB-UPT integration
 must be regenerated.
 
@@ -942,6 +944,39 @@ force integration uses the aligned `vehicle` triangles. For sampled surfaces,
 inverse-inclusion-probability measures produce Monte Carlo force estimates;
 full-surface queries avoid that sampling error. Checkpointing and resume use
 the recipe's standard optimizer, scheduler, and `.mdlus` mechanisms.
+
+### Geometry pooling execution options
+
+`model.pooling_chunk_size` controls the number of neighbor edges processed per
+message MLP call. Larger chunks can reduce GPU launch overhead while preserving
+the graph, pooling radius, and message aggregation. The default remains 4,096.
+An opt-in candidate for large DrivAerML inputs is:
+
+```bash
+python src/train.py model=ab_upt_surface dataset=drivaer_ml_ab_upt_surface \
+    run_id=surface_fp32_messages precision=bfloat16 \
+    model.pooling_chunk_size=262144 model.pooling_message_fp32=true
+```
+
+The same options apply to volume and joint modes. `pooling_message_fp32=true`
+keeps only the geometry message MLP outside autocast, using FP32 model weights;
+the remaining operations follow `precision`. Use AMP with FP32 model weights,
+not an explicitly half-cast model. Float64 models retain float64 execution.
+The flag defaults to `false`, so existing configurations keep their behavior.
+
+This is an execution optimization, not a new AB-UPT architecture. The paper
+reports FP16 mixed precision with FP32 positional embeddings and RoPE; it does
+not specify this additional FP32 message-MLP policy. BF16 elsewhere is also an
+explicit experiment choice. Larger chunks and FP32 messages can alter rounding,
+so check full-recipe throughput, memory, and physical validation metrics before
+adopting them. An isolated model benchmark does not establish an end-to-end
+training speedup or equivalent accuracy.
+
+The message precision flag and chunk size are serialized in the model
+constructor. Existing checkpoints remain loadable into a model with these
+explicit execution overrides; the optimizer and EMA parameter shapes are
+unchanged. Save the resolved configuration and retain the source checkpoint
+when starting such a continuation.
 
 ### Anchor supervision and accuracy experiments
 

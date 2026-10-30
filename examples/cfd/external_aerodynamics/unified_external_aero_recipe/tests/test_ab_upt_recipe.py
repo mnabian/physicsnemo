@@ -469,15 +469,24 @@ def test_production_checkpoint_load_rejects_changed_numerics(tmp_path, override)
 
 
 def test_production_checkpoint_load_allows_decode_tuning(tmp_path):
-    """Operational chunk sizes/backend remain adjustable after training."""
+    """Operational chunk sizes/backend/precision can change on continuation."""
     path = tmp_path / "decode-tuning.mdlus"
     source = ABUPTRecipe(**SMALL, query_chunk_size=17)
     source.save(str(path))
     destination = ABUPTRecipe(
-        **(SMALL | {"pooling_chunk_size": 97, "radius_search_backend": None}),
+        **(
+            SMALL
+            | {
+                "pooling_chunk_size": 97,
+                "pooling_message_fp32": True,
+                "radius_search_backend": None,
+            }
+        ),
         query_chunk_size=3,
     )
     destination.load(str(path))
+    assert destination.operator.pooling_message_fp32
+    assert not source.operator.pooling_message_fp32
     args = {
         name: torch.rand(1, count, 3)
         for name, count in (
@@ -636,3 +645,31 @@ def test_parameter_scale_validation(scale):
     """Reject nonpositive, nonfinite, and boolean conditioning scales."""
     with pytest.raises(ValueError, match="parameter_scale"):
         ABUPTRecipe(**SMALL, parameter_scale=scale)
+
+
+@pytest.mark.parametrize("mode", ["surface", "volume", "joint"])
+def test_pooling_execution_options_roundtrip(mode, tmp_path):
+    """Hydra overrides reach the operator and survive checkpoint reconstruction."""
+    with initialize_config_dir(config_dir=str(ROOT / "conf"), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                f"model=ab_upt_{mode}",
+                "model.pooling_message_fp32=true",
+                "model.pooling_chunk_size=262144",
+            ],
+        )
+    cfg.model.update(
+        {key: value for key, value in SMALL.items() if key != "pooling_chunk_size"}
+    )
+    model = hydra.utils.instantiate(cfg.model)
+    assert model.operator.pooling_message_fp32
+    assert model.operator.pooling_chunk_size == 262144
+    path = tmp_path / f"{mode}-fp32-messages.mdlus"
+    model.save(str(path))
+    restored = Module.from_checkpoint(str(path))
+    assert restored.operator.pooling_message_fp32
+    assert restored.operator.pooling_chunk_size == 262144
+    assert restored.mode == mode
+    for name, value in model.named_parameters():
+        torch.testing.assert_close(dict(restored.named_parameters())[name], value)

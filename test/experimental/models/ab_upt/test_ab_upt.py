@@ -46,6 +46,7 @@ DEFAULTS = dict(
     pooling_chunk_size=4096,
     parameter_channels=0,
     radius_search_backend=None,
+    pooling_message_fp32=False,
 )
 SMALL = dict(
     hidden_dim=24,
@@ -154,9 +155,14 @@ def test_frozen_reference_and_checkpoint(index, device):
     )
 
 
-def test_checkpoint_roundtrip(tmp_path, monkeypatch):
+@pytest.mark.parametrize("pooling_message_fp32", [False, True])
+def test_checkpoint_roundtrip(tmp_path, monkeypatch, pooling_message_fp32):
     monkeypatch.chdir(tmp_path)
-    assert validate_checkpoint(ABUPT(**SMALL), ABUPT(**SMALL), inputs())
+    config = SMALL | {"pooling_message_fp32": pooling_message_fp32}
+    assert validate_checkpoint(ABUPT(**config), ABUPT(**config), inputs())
+    ABUPT(**config).save("precision.mdlus")
+    restored = Module.from_checkpoint("precision.mdlus")
+    assert restored.pooling_message_fp32 is pooling_message_fp32
 
 
 @pytest.mark.parametrize("field", ["surface", "volume"])
@@ -369,8 +375,11 @@ def test_rotary_mixed_precision_matches_float32_complex_rotation(dtype, device):
     torch.testing.assert_close(actual_grad, expected_grad, rtol=0, atol=0)
 
 
-def test_pooling_chunk_independence_empty_neighbors_and_coordinate_gradients():
-    model = ABUPT(**SMALL).double()
+@pytest.mark.parametrize("pooling_message_fp32", [False, True])
+def test_pooling_chunk_independence_empty_neighbors_and_coordinate_gradients(
+    pooling_message_fp32,
+):
+    model = ABUPT(**(SMALL | {"pooling_message_fp32": pooling_message_fp32})).double()
     args = inputs(dtype=torch.float64)
     g = args[0].clone().requires_grad_()
     result = model.encode_geometry(g, args[1])
@@ -382,6 +391,50 @@ def test_pooling_chunk_independence_empty_neighbors_and_coordinate_gradients():
     assert torch.isfinite(g.grad).all() and g.grad.abs().sum() > 0
     distant = model.encode_geometry(g, args[1] + 100)
     assert torch.isfinite(distant).all()
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_fp32_messages_match_full_precision_pool_and_gradients(dtype, device):
+    """Autocast and chunk boundaries must preserve the FP32 local operator."""
+    torch.manual_seed(42)
+    model = ABUPT(**(SMALL | {"pooling_message_fp32": True})).to(device)
+    # Isolate local messages from the projection, which intentionally remains
+    # under autocast. Compare to an independent dense radius/mean expression.
+    model.pool_projection = torch.nn.Identity()
+    geometry, supernodes, *_ = inputs(device)
+    geometry = geometry.detach().requires_grad_()
+    supernodes = supernodes.detach().requires_grad_()
+    delta = geometry[:, None] - supernodes[:, :, None]
+    distance = delta.norm(dim=-1, keepdim=True)
+    messages = model.message(torch.cat((delta, distance), dim=-1))
+    mask = distance < model.pooling_radius
+    reference = (messages * mask).sum(dim=2) / mask.sum(dim=2).clamp_min(1)
+    variables = (geometry, supernodes, *model.message.parameters())
+    expected_grads = torch.autograd.grad(reference.square().sum(), variables)
+    seen = []
+    hook = model.message.register_forward_hook(
+        lambda module, args, result: seen.append(result.dtype)
+    )
+    try:
+        for chunk in (17, 4096):
+            model.pooling_chunk_size = chunk
+            with torch.autocast(torch.device(device).type, dtype=dtype):
+                result = model._pool(geometry, supernodes)[..., : model.hidden_dim]
+            assert result.dtype == torch.float32
+            torch.testing.assert_close(result, reference, rtol=2e-5, atol=2e-6)
+            gradients = torch.autograd.grad(result.square().sum(), variables)
+            for actual, expected in zip(gradients, expected_grads):
+                torch.testing.assert_close(actual, expected, rtol=2e-4, atol=2e-5)
+    finally:
+        hook.remove()
+    assert seen and set(seen) == {torch.float32}
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_fp32_messages_reject_reduced_precision_weights(dtype):
+    model = ABUPT(**(SMALL | {"pooling_message_fp32": True})).to(dtype)
+    with pytest.raises(ValueError, match="requires float32 message weights"):
+        model._pool(*inputs(dtype=dtype)[:2])
 
 
 @pytest.mark.parametrize(
@@ -466,8 +519,10 @@ def test_model_curl_agrees_with_autograd_and_has_parameter_gradients():
 
 
 @pytest.mark.parametrize("helper", [validate_amp, validate_combo_optims])
-def test_supported_optimizations(helper, device):
-    assert helper(ABUPT(**SMALL).to(device), inputs(device), iterations=2)
+@pytest.mark.parametrize("pooling_message_fp32", [False, True])
+def test_supported_optimizations(helper, pooling_message_fp32, device):
+    config = SMALL | {"pooling_message_fp32": pooling_message_fp32}
+    assert helper(ABUPT(**config).to(device), inputs(device), iterations=2)
 
 
 @pytest.mark.parametrize(
@@ -480,6 +535,8 @@ def test_supported_optimizations(helper, device):
         dict(pooling_radius=0),
         dict(pooling_radius=float("nan")),
         dict(pooling_chunk_size=0),
+        dict(pooling_message_fp32="true"),
+        dict(pooling_message_fp32=1),
         dict(radius_search_backend="missing"),
         dict(parameter_channels=-1),
     ],

@@ -14,26 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import os
 import sys
-import logging
 import tempfile
+
 import pyvista as pv
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 import hydra
-from hydra.utils import to_absolute_path, instantiate
-from omegaconf import DictConfig
-
 import torch
+from datapipe import simsample_collate
+from hydra.utils import instantiate, to_absolute_path
+from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
 from physicsnemo.distributed.manager import DistributedManager
-from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils import load_checkpoint
-
-from datapipe import simsample_collate
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 
 def denormalize_positions(
@@ -301,9 +300,10 @@ class InferenceWorker:
 
             # Model returns [N, T, Fo]; Fo = 3 for position-only, 3+sum(C_k) with dynamic targets
             N, T, Fo = sample.node_target.shape
-            assert T == self.T, (
-                f"Target T={T} does not match model rollout steps {self.T}"
-            )
+            if T != self.T:
+                raise ValueError(
+                    f"Target T={T} does not match model rollout steps {self.T}"
+                )
 
             # Forward rollout: model returns [N, T, Fo]
             with torch.autocast(
@@ -357,12 +357,68 @@ class InferenceWorker:
                     self.logger.info(
                         f"[Rank {self.dist.rank}] Saved predicted fields: {list(pred_extra.keys())}"
                     )
+                # Optional car-crash OVRTX viewer bundle from the saved VTP sequence
+                # (visualization/ovrtx; set inference.ovrtx_export_dir).
+                ovrtx_dir = self.cfg.inference.get("ovrtx_export_dir")
+                if ovrtx_dir:
+                    self._export_ovrtx(ovrtx_dir, run_name, pred_dir, exact_dir)
             elif self.write_vtp:
                 self.logger.warning(
                     f"[Rank {self.dist.rank}] Missing VTP frames dir {vtp_frames_dir}; skipping export."
                 )
 
         self.logger.info(f"[Rank {self.dist.rank}] Finished run: {run_name}")
+
+    def _export_ovrtx(self, root, run_name, pred_dir, exact_dir):
+        """Write a car-crash OVRTX viewer bundle (visualization/ovrtx) from the
+        VTP frame sequence just saved. Off when ``inference.ovrtx_export_dir``
+        (``root``) is unset; needs usd-core (pxr), pillow and pyvista and is
+        skipped with a warning without them. A failed export is logged and does
+        not abort the inference run (the VTP frames are already on disk)."""
+        if not root:
+            return
+        try:
+            from visualization.ovrtx import usd_writer
+            from visualization.ovrtx.bundle import export_bundle
+            from visualization.ovrtx.fields import SlotAssignment
+            from visualization.ovrtx.scene import load_vtp_sequence
+
+            usd_writer._pxr()  # raises ImportError without usd-core
+            import PIL  # noqa: F401
+            import pyvista  # noqa: F401
+        except ImportError as error:
+            self.logger.warning(
+                f"[Rank {self.dist.rank}] OVRTX export skipped: {error}"
+            )
+            return
+        inference_cfg = self.cfg.inference
+        model_cfg = self.cfg.get("model")
+        dt_seconds = model_cfg.get("dt") if model_cfg is not None else None
+        out_dir = os.path.join(root, f"rank{self.dist.rank}", run_name)
+        try:
+            scene = load_vtp_sequence(
+                pred_dir,
+                exact_dir,
+                frame_spec=inference_cfg.get("ovrtx_frames") or "demo",
+                parts=inference_cfg.get("ovrtx_parts") or "components",
+                name=run_name,
+                dt_ms=1000.0 * float(dt_seconds) if dt_seconds else 5.0,
+            )
+            export_bundle(
+                scene,
+                out_dir,
+                assignment=SlotAssignment.for_scene(scene, "model"),
+                templates_dir=inference_cfg.get("ovrtx_templates_dir") or None,
+                overwrite=True,
+                log=self.logger.info,
+            )
+        except Exception as error:  # an optional side output must not end the run
+            self.logger.error(
+                f"[Rank {self.dist.rank}] OVRTX export of {run_name} failed: {error!r}; "
+                "the VTP frames are kept, the inference run continues"
+            )
+            return
+        self.logger.info(f"[Rank {self.dist.rank}] OVRTX bundle written to {out_dir}")
 
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")

@@ -18,3 +18,9 @@
 output_dir_pred: "./predicted_vtps"
 output_dir_exact: "./exact_vtps"
 raw_data_dir_test: ???          # Required: set via experiment config
+# Optional car-crash OVRTX viewer bundles (visualization/ovrtx/README.md) written
+# from the saved VTP sequences under <ovrtx_export_dir>/rank<r>/<run>/; null disables them.
+ovrtx_export_dir: null
+ovrtx_frames: demo              # first 25 frames; or fit | a-b | stride:k
+ovrtx_parts: components         # connected components as parts (the VTP files carry no part ids)
+ovrtx_templates_dir: null       # the viewer release's MDL shader templates (visualization/ovrtx/templates/README.md)

@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Position-loss options (physical scale, Huber, L1, frame weighting, edge term)."""
+"""Position-loss options (physical scale, relative L2, increment loss)."""
 
 import sys
 from pathlib import Path
@@ -21,29 +21,12 @@ from pathlib import Path
 import pytest
 import torch
 from hydra import compose, initialize_config_dir
-from omegaconf import OmegaConf
 
 CRASH_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CRASH_DIR))
 CONF = CRASH_DIR / "conf"
 
-from datapipe import SimSample  # noqa: E402
-from losses import (  # noqa: E402
-    FrameWeighter,
-    PositionLoss,
-    edge_consistency_loss,
-    frame_indices,
-)
-
-LOSS_KEYS = {
-    "loss",
-    "loss_space",
-    "loss_scale_mm",
-    "huber_delta_mm",
-    "frame_weighting",
-    "frame_weighting_ema",
-    "edge_loss_weight",
-}
+from losses import PositionLoss, increment_loss  # noqa: E402
 
 
 def test_default_position_loss_is_the_plain_mse():
@@ -70,100 +53,56 @@ def test_physical_space_rescales_each_axis_to_millimetres():
     same = PositionLoss("mse", "physical", scale_mm=4.0, pos_std=torch.full((3,), 4.0))
     torch.testing.assert_close(same(pred, target), PositionLoss()(pred, target))
     with pytest.raises(ValueError, match="physical"):
-        PositionLoss("huber", "normalized")
+        PositionLoss("relative_l2", "normalized")
     with pytest.raises(ValueError, match="position std"):
         PositionLoss("mse", "physical")
     with pytest.raises(ValueError, match="training.loss must"):
         PositionLoss("cauchy")
 
 
-def test_huber_and_l1_in_millimetres():
-    std = torch.ones(3) * 10.0  # 1 normalized unit = 10 mm, scale 10 mm -> identity
-    small = torch.full((5, 3), 0.1)  # 1 mm errors
-    large = torch.full((5, 3), 2.0)  # 20 mm errors
-    zero = torch.zeros(5, 3)
-    huber = PositionLoss(
-        "huber", "physical", scale_mm=10.0, huber_delta_mm=3.0, pos_std=std
+def test_relative_l2_is_the_norm_ratio_of_error_to_displacement():
+    """Per frame, ||error|| / ||target - reference|| over all nodes and axes in
+    millimetres; scale-free; a trajectory gives one value per frame; without a
+    reference the targets count as displacements; normalized space is refused."""
+    torch.manual_seed(3)
+    std = torch.tensor([2.0, 4.0, 8.0])
+    loss = PositionLoss("relative_l2", "physical", scale_mm=10.0, pos_std=std)
+    reference = torch.randn(30, 3)
+    motion = torch.randn(30, 3)
+    error = 0.1 * torch.randn(30, 3)
+    target = reference + motion
+    prediction = target + error
+    expected = ((error * std).norm() / (motion * std).norm()).item()
+    assert loss(prediction, target, reference=reference).item() == pytest.approx(
+        expected, rel=1e-5
     )
-    l1 = PositionLoss("l1", "physical", scale_mm=10.0, pos_std=std)
-    mse = PositionLoss("mse", "physical", scale_mm=10.0, pos_std=std)
-    # Below delta Huber is 0.5 * squared error; above it is linear in the error.
-    torch.testing.assert_close(huber(small, zero), 0.5 * mse(small, zero))
-    delta = 0.3
+    assert loss.per_frame(prediction, target, reference=reference).shape == (1,)
+    # Scale-free: the common scale cancels, the per-axis std does not.
+    other = PositionLoss("relative_l2", "physical", scale_mm=1.0, pos_std=std)
+    assert other(prediction, target, reference=reference).item() == pytest.approx(
+        expected, rel=1e-5
+    )
+    # Exact prediction: zero. Doubling the error doubles the loss (a norm, not a square).
+    assert loss(target, target, reference=reference).item() == pytest.approx(0.0)
+    assert loss(
+        target + 2 * error, target, reference=reference
+    ).item() == pytest.approx(2 * expected, rel=1e-5)
+    # Trajectories: one ratio per frame, each over its own displacement.
+    traj_target = torch.stack([reference + motion, reference + 3 * motion], dim=1)
+    traj_pred = traj_target + torch.stack([error, error], dim=1)
+    per_frame = loss.per_frame(traj_pred, traj_target, reference=reference)
+    assert per_frame.shape == (2,)
+    assert per_frame[0].item() == pytest.approx(expected, rel=1e-5)
+    assert per_frame[1].item() == pytest.approx(expected / 3, rel=1e-5)
     torch.testing.assert_close(
-        huber(large, zero), torch.tensor(delta * (2.0 - 0.5 * delta))
+        loss(traj_pred, traj_target, reference=reference), per_frame.mean()
     )
-    torch.testing.assert_close(l1(large, zero), torch.tensor(2.0))
-    assert huber(large, zero) < mse(large, zero)
-
-
-def test_frame_weighter_equalises_frames_and_averages_to_one():
-    weighter = FrameWeighter(num_frames=4, momentum=0.5)
-    frames = torch.arange(4)
-    losses = torch.tensor([1.0, 2.0, 4.0, 8.0])
-    first = weighter.apply(frames, losses)
-    torch.testing.assert_close(first, losses.mean())  # unweighted until frames are seen
-    second = weighter.apply(frames, losses)
-    w = weighter.weights(frames)
-    assert torch.allclose(w.float(), losses.mean() / losses, rtol=1e-5)
-    torch.testing.assert_close(second.double(), (w * losses.double()).mean())
-    # A frame never seen keeps weight one; state round-trips.
-    partial = FrameWeighter(num_frames=3)
-    partial.apply(torch.tensor([1]), torch.tensor([5.0]))
-    assert partial.weights(torch.tensor([0, 1])).tolist() == [1.0, 1.0]
-    clone = FrameWeighter(num_frames=3)
-    clone.load_state_dict(partial.state_dict())
-    assert torch.equal(clone.ema, partial.ema) and torch.equal(clone.seen, partial.seen)
-    with pytest.raises(ValueError):
-        FrameWeighter(0)
-
-
-def test_frame_indices_for_trajectories_and_single_frames():
-    assert frame_indices(None, torch.zeros(3, 6, 3), 6).tolist() == list(range(6))
-    sample = SimSample(
-        {"coords": torch.zeros(3, 3), "time": torch.tensor(0.5)}, torch.zeros(3, 3)
-    )
-    assert frame_indices(sample, sample.node_target, 6).tolist() == [3]
-    sample.node_features["time"] = torch.tensor(5 / 6)
-    assert frame_indices(sample, sample.node_target, 6).tolist() == [5]
-    with pytest.raises(ValueError, match="time"):
-        frame_indices(
-            SimSample({"coords": torch.zeros(3, 3)}, torch.zeros(3, 3)),
-            torch.zeros(3, 3),
-            6,
-        )
-
-
-def test_edge_consistency_loss_ignores_rigid_translation_and_masked_slots():
-    torch.manual_seed(2)
-    n, k = 12, 4
-    target = torch.randn(n, 3)
-    index = torch.randint(0, n, (n, k))
-    mask = torch.ones(n, k, dtype=torch.bool)
-    std = torch.tensor([10.0, 10.0, 10.0])
-    # Rigid translation of the whole prediction: no relative error.
-    shifted = target + torch.tensor([0.3, -0.2, 0.1])
-    assert edge_consistency_loss(
-        shifted, target, index, mask, std
-    ).item() == pytest.approx(0.0)
-    # A single displaced node is caught through its slots and its neighbours' slots.
-    distorted = target.clone()
-    distorted[0] += 1.0
-    loss = edge_consistency_loss(distorted, target, index, mask, std)
-    assert loss > 0
-    # Masking every slot that touches node 0 removes the signal.
-    touched = (index == 0) | (torch.arange(n).unsqueeze(1) == 0)
-    assert edge_consistency_loss(
-        distorted, target, index, ~touched, std
-    ).item() == pytest.approx(0.0)
-    # Trajectory inputs average over the time axis with the same slot count.
-    traj_pred = distorted.unsqueeze(1).repeat(1, 5, 1)
-    traj_true = target.unsqueeze(1).repeat(1, 5, 1)
-    torch.testing.assert_close(
-        edge_consistency_loss(traj_pred, traj_true, index, mask, std), loss
-    )
-    with pytest.raises(ValueError, match="knn_index"):
-        edge_consistency_loss(target, target, index, mask[:, :2], std)
+    # No reference: the targets are displacements already.
+    assert loss(motion + error, motion).item() == pytest.approx(expected, rel=1e-5)
+    with pytest.raises(ValueError, match="physical"):
+        PositionLoss("relative_l2", "normalized")
+    with pytest.raises(ValueError, match="elementwise"):
+        loss.elementwise(prediction, target)
 
 
 def _compose(name):
@@ -179,52 +118,36 @@ def _compose(name):
         )
 
 
-@pytest.mark.parametrize(
-    "suffix, expected",
-    [
-        ("physical", {"loss": "mse", "loss_space": "physical", "loss_scale_mm": 10.0}),
-        (
-            "huber",
-            {
-                "loss": "huber",
-                "loss_space": "physical",
-                "loss_scale_mm": 10.0,
-                "huber_delta_mm": 3.0,
-            },
-        ),
-        ("l1", {"loss": "l1", "loss_space": "physical", "loss_scale_mm": 10.0}),
-        (
-            "frameweight",
-            {
-                "loss": "mse",
-                "loss_space": "physical",
-                "loss_scale_mm": 10.0,
-                "frame_weighting": "ema",
-                "frame_weighting_ema": 0.99,
-            },
-        ),
-        (
-            "edge",
-            {
-                "loss": "mse",
-                "loss_space": "physical",
-                "loss_scale_mm": 10.0,
-                "edge_loss_weight": 1.0,
-            },
-        ),
-    ],
-)
-def test_loss_sweep_recipes_change_only_the_loss(suffix, expected):
-    base = _compose("crash_deformer_knn_yaris_time_conditional")
-    variant = _compose(f"crash_deformer_knn_yaris_tc_loss_{suffix}")
-    added = set(variant.training) - set(base.training)
-    assert added == set(expected) and added <= LOSS_KEYS
-    for key, value in expected.items():
-        assert variant.training[key] == value, key
-    for key in base.training:
-        assert base.training[key] == variant.training[key], key
-    for group in ("model", "datapipe", "reader", "yaris"):
-        assert OmegaConf.to_container(
-            variant[group], resolve=True
-        ) == OmegaConf.to_container(base[group], resolve=True), group
-    assert variant.experiment_name != base.experiment_name
+def test_increment_loss_scores_the_change_between_the_two_frames():
+    """The increment term is the position loss of the predicted minus the true
+    increment, in the main loss's millimetre scale; a shared offset of both
+    frames costs nothing and a single frame or a trajectory is refused."""
+    torch.manual_seed(0)
+    std = torch.tensor([2.0, 4.0, 8.0])
+    loss = PositionLoss(kind="mse", space="physical", scale_mm=10.0, pos_std=std)
+    target = torch.randn(6, 2, 3)
+    offset = torch.randn(6, 1, 3)
+    assert increment_loss(loss, target + offset, target).item() == pytest.approx(0.0)
+    prediction = target.clone()
+    prediction[:, 1] += torch.tensor([1.0, 0.0, 0.0])  # 2 mm more motion along x
+    expected = ((1.0 * std[0] / 10.0) ** 2) / 3  # one channel of three
+    assert increment_loss(loss, prediction, target).item() == pytest.approx(
+        expected.item()
+    )
+    for bad in (torch.zeros(6, 3), torch.zeros(6, 3, 3)):
+        with pytest.raises(ValueError, match="frame pairs"):
+            increment_loss(loss, bad, bad)
+
+
+def test_final_recipes_use_the_physical_mse_loss():
+    network = _compose("yaris_deformer")
+    baseline = _compose("yaris_geotransolver")
+    corrector = _compose("yaris_deformer_corrector")
+    for cfg in (network, baseline, corrector):
+        assert cfg.training.loss == "mse" and cfg.training.loss_space == "physical"
+        assert cfg.training.loss_scale_mm == 10.0
+    assert corrector.training.get("increment_loss_weight", 0.0) == 0.0
+    with pytest.raises(ValueError, match="training.loss"):
+        PositionLoss(kind="huber", space="physical", pos_std=torch.ones(3))
+    with pytest.raises(ValueError, match="loss_space=physical"):
+        PositionLoss(kind="relative_l2", space="normalized")

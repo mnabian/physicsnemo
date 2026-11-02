@@ -13,10 +13,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Full-resolution Yaris datapipe and nested-checkpointing recipe contracts."""
+"""Full-resolution Yaris datapipe, trainer and recipe contracts."""
 
 import json
-import math
 import sys
 from pathlib import Path
 
@@ -204,8 +203,8 @@ def test_split_manifest_rules(yaris_root, tmp_path):
     bad.write_text("split,sample_name\ntrain,A_1\nvalidation,A_1\ntest,C\n")
     with pytest.raises(ValueError, match="Duplicate"):
         load_splits(bad)
-    bad.write_text("split,sample_name\ntrain,X_100_GR252303\nvalidation,B\ntest,C\n")
-    with pytest.raises(ValueError, match="100_GR252303"):
+    bad.write_text("run,name\ntrain,A_1\n")
+    with pytest.raises(ValueError, match="columns split,sample_name"):
         load_splits(bad)
 
 
@@ -442,6 +441,7 @@ def test_exact_validation_pools_variable_horizons(yaris_root, tmp_path):
     from yaris_full_trainer import (
         ExactShardSampler,
         accumulate_validation,
+        summarize_cases,
         summarize_validation,
     )
 
@@ -463,6 +463,7 @@ def test_exact_validation_pools_variable_horizons(yaris_root, tmp_path):
     # Two ranks, exact partition, summed like the distributed all-reduce.
     totals = None
     seen = []
+    records = []
     for rank in range(2):
         loader = DataLoader(
             validation,
@@ -471,7 +472,7 @@ def test_exact_validation_pools_variable_horizons(yaris_root, tmp_path):
             collate_fn=simsample_collate,
         )
         part, names = accumulate_validation(
-            model, loader, stats, 5, torch.device("cpu")
+            model, loader, stats, 5, torch.device("cpu"), per_case=records
         )
         assert part.shape == (5, 5) and part.dtype == torch.float64
         totals = part if totals is None else totals + part
@@ -483,9 +484,11 @@ def test_exact_validation_pools_variable_horizons(yaris_root, tmp_path):
     summary = summarize_validation(totals)
     # Reference: pooled over every (case, step, node, channel) entry.
     errors = []
+    names = []
     with torch.no_grad():
         for i in range(2):
             sample = validation[i]
+            names.append(sample.yaris_case_name)
             errors.append(
                 (model(sample=sample, data_stats=stats) - sample.node_target).double()
             )
@@ -505,6 +508,26 @@ def test_exact_validation_pools_variable_horizons(yaris_root, tmp_path):
         torch.sqrt(torch.square(physical).sum(1).mean()),
         rtol=1e-6,
         atol=1e-9,
+    )
+    # Per-case breakdown: each case pooled over its own steps and nodes, and
+    # pooling the cases back together recovers the global number.
+    cases = summarize_cases(records)
+    assert [c["case"] for c in cases] == ["B_1", "B_2"]
+    assert sorted(names) == ["B_1", "B_2"]
+    for case in cases:
+        e = errors[names.index(case["case"])]
+        assert case["steps"] == e.shape[1]
+        assert len(case["vector_RMSE_mm_per_time"]) == case["steps"]
+        own = torch.sqrt(torch.square((e * std).reshape(-1, 3)).sum(1).mean())
+        assert case["vector_RMSE_mm"] == pytest.approx(own.item(), rel=1e-6)
+        first = torch.sqrt(torch.square(e[:, 0] * std).sum(1).mean())
+        assert case["vector_RMSE_mm_per_time"][0] == pytest.approx(
+            first.item(), rel=1e-6
+        )
+    pooled_sq = sum(c["vector_RMSE_mm"] ** 2 * c["steps"] * kept for c in cases)
+    entries = sum(c["steps"] * kept for c in cases)
+    assert (pooled_sq / entries) ** 0.5 == pytest.approx(
+        summary["vector_RMSE_mm"].item(), rel=1e-6
     )
     # A trailing step nobody reaches is dropped; an interior hole is rejected.
     padded = torch.cat((totals, torch.zeros(2, 5, dtype=torch.float64)))
@@ -631,7 +654,7 @@ def test_one_time_step_sampling_and_time_conditional_model(yaris_root, tmp_path)
 def test_yaris_time_conditional_recipe_contract(yaris_root, tmp_path):
     with initialize_config_dir(config_dir=str(CONF), version_base="1.3"):
         cfg = compose(
-            config_name="crash_deformer_knn_yaris_time_conditional",
+            config_name="yaris_deformer",
             overrides=[
                 f"yaris.data_root={yaris_root}",
                 f"yaris.split_manifest={yaris_root / 'splits.csv'}",
@@ -666,7 +689,7 @@ def _compose_yaris_tc(yaris_root, work_dir, extra=()):
     """The Yaris TC recipe at tiny dimensions on the synthetic store."""
     with initialize_config_dir(config_dir=str(CONF), version_base="1.3"):
         return compose(
-            config_name="crash_deformer_knn_yaris_time_conditional",
+            config_name="yaris_deformer",
             overrides=[
                 f"yaris.data_root={yaris_root}",
                 f"yaris.split_manifest={yaris_root / 'splits.csv'}",
@@ -723,11 +746,14 @@ def test_yaris_time_conditional_trainer_end_to_end(yaris_root, tmp_path):
     payload = json.loads(record.read_text())
     assert sorted(payload["cases"]) == ["B_1", "B_2"]
     assert payload["nodes_per_time"][-1] == NODES - 3  # only B_1 reaches step 6
+    # Target frames 5, 10, ..., 30 of the 1 ms stores: the labels are their times.
+    assert payload["target_time_ms"] == [5.0 * k for k in range(1, 7)]
 
 
-def test_yaris_tc_trainer_loss_options_end_to_end(yaris_root, tmp_path):
-    """Huber in millimetres, EMA frame weighting and the edge term train together,
-    and the exact validation still runs."""
+def test_yaris_tc_trainer_relative_l2_end_to_end(yaris_root, tmp_path):
+    """The relative L2 loss trains through the time-conditional path (main and
+    coarse terms take the undeformed coordinates as the reference) and the
+    exact validation still reports millimetres."""
     from yaris_full_trainer import YarisFullTrainer
 
     from physicsnemo.distributed import DistributedManager
@@ -737,31 +763,26 @@ def test_yaris_tc_trainer_loss_options_end_to_end(yaris_root, tmp_path):
         yaris_root,
         tmp_path / "work",
         extra=[
-            "+training.loss=huber",
-            "+training.loss_space=physical",
-            "+training.loss_scale_mm=10.0",
-            "+training.huber_delta_mm=3.0",
-            "+training.frame_weighting=ema",
-            "+training.edge_loss_weight=1.0",
+            "training.loss=relative_l2",
+            "training.loss_space=physical",
+            "training.loss_scale_mm=10.0",
         ],
     )
     if not DistributedManager.is_initialized():
         DistributedManager.initialize()
     logger0 = RankZeroLoggingWrapper(
-        PythonLogger("yaris-tc-loss-test"), DistributedManager()
+        PythonLogger("yaris-tc-rel-l2-test"), DistributedManager()
     )
     trainer = YarisFullTrainer(cfg, logger0)
-    assert (
-        trainer.position_loss.kind == "huber"
-        and trainer.position_loss.space == "physical"
-    )
-    assert trainer.frame_weighter is not None and trainer.edge_loss_weight == 1.0
+    assert trainer.position_loss.kind == "relative_l2"
     loader = iter(trainer.dataloader)
     for _ in range(2):
         loss = trainer.train(next(loader)[0], 0)
-        assert torch.isfinite(loss)
-    assert {"trajectory", "coarse", "edge"} <= set(trainer.last_loss_components)
-    assert trainer.frame_weighter.seen.any()
+        assert torch.isfinite(loss) and loss.item() >= 0.0
+    components = trainer.last_loss_components
+    assert {"trajectory", "coarse"} <= set(components)
+    # A norm ratio, not a squared error in scale units: both terms stay O(1).
+    assert 0.0 <= components["trajectory"].item() < 100.0
     stats = trainer.validate(0)
     assert torch.isfinite(stats["MSE"])
     payload = json.loads(
@@ -815,47 +836,9 @@ def test_solid_edges_and_isolated_fallback(yaris_root):
         YarisFullReader(yaris_root / "splits.csv", connect_isolated_k=-1)
 
 
-def test_design_variables_become_a_global_token(yaris_root, tmp_path):
-    from yaris_full import YarisFullGraphDataset, YarisFullReader
-
-    reader = YarisFullReader(yaris_root / "splits.csv", yaris_root / "outliers.npz")
-    reader.open(yaris_root / "A_1.zarr")
-    known = reader.design_variables(
-        zarr.open_group(str(yaris_root / "A_1.zarr"), mode="r")
-    )
-    assert known.shape == (9,) and known[-1] == 1.0
-    assert np.allclose(
-        known[:8], 4.0 * np.array([-0.05 * i for i in range(1, 9)]), atol=1e-6
-    )
-    missing = reader.design_variables(
-        zarr.open_group(str(yaris_root / f"{DESIGN_MISSING_CASE}.zarr"), mode="r")
-    )
-    assert np.array_equal(missing, np.zeros(9, dtype=np.float32))
-    dataset = YarisFullGraphDataset(
-        reader,
-        yaris_root,
-        num_samples=3,
-        num_steps=7,
-        split="train",
-        stats_dir=tmp_path / "stats",
-        stats_mode="compute",
-        sample_type="one_time_step",
-        initial_history_steps=1,
-        local_knn_k=4,
-        local_knn_cache_dir=tmp_path / "cache",
-        design_variables=True,
-    )
-    sample = dataset[0]
-    assert sample.global_features["design"].shape == (9,)
-    assert dataset.global_stats["global_mean"].shape == (9,)
-    assert dataset.global_features_keys == ["design"]
-
-
-def test_yaris_tc_geodesic_with_solids_and_design_token_end_to_end(
-    yaris_root, tmp_path
-):
+def test_yaris_tc_geodesic_with_solids_end_to_end(yaris_root, tmp_path):
     """Geodesic neighborhoods over shell + solid edges with the isolated-node
-    fallback, and the design token through the model's global path."""
+    fallback train and validate through the time-conditional path."""
     from yaris_full_trainer import YarisFullTrainer
 
     from physicsnemo.distributed import DistributedManager
@@ -868,8 +851,6 @@ def test_yaris_tc_geodesic_with_solids_and_design_token_end_to_end(
             "reader.include_solid_edges=true",
             "reader.connect_isolated_k=2",
             "model.local_neighborhood=geodesic",
-            "datapipe.design_variables=true",
-            "model.global_dim=17",
         ],
     )
     if not DistributedManager.is_initialized():
@@ -884,66 +865,11 @@ def test_yaris_tc_geodesic_with_solids_and_design_token_end_to_end(
         dataset.graph.knn_mask[:, 1:].any(dim=1).all()
     )  # every kept node has neighbors
     sample = next(iter(trainer.dataloader))[0]
-    assert sample.global_features["design"].shape == (9,)
+    assert sample.global_features is None
     loss = trainer.train(sample, 0)
     assert torch.isfinite(loss)
     stats = trainer.validate(0)
     assert torch.isfinite(stats["MSE"])
-
-
-@pytest.mark.parametrize(
-    "name, reader_keys, datapipe_keys, model_keys",
-    [
-        (
-            "crash_deformer_knn_yaris_tc_geo_attn",
-            {"include_solid_edges": True, "connect_isolated_k": 8},
-            {"local_knn_metric": "geodesic"},
-            {"local_neighborhood": "geodesic"},
-        ),
-        (
-            "crash_deformer_knn_yaris_tc_geo_knnmpnn",
-            {"include_solid_edges": True, "connect_isolated_k": 8},
-            {"local_knn_metric": "geodesic", "local_knn_k": 8},
-            {
-                "local_neighborhood": "geodesic",
-                "local_processor": "knn_mpnn",
-                "local_knn_k": 8,
-            },
-        ),
-        (
-            "crash_deformer_knn_yaris_tc_euclid_attn_doe",
-            {},
-            {"design_variables": True},
-            {"global_dim": 41},
-        ),
-        (
-            "crash_deformer_knn_yaris_tc_euclid_knnmpnn",
-            {},
-            {"local_knn_k": 8},
-            {"local_processor": "knn_mpnn", "local_knn_k": 8},
-        ),
-    ],
-)
-def test_yaris_tc_variant_recipes_change_only_their_keys(
-    name, reader_keys, datapipe_keys, model_keys
-):
-    base = _compose_public("crash_deformer_knn_yaris_tc_loss_physical")
-    variant = _compose_public(name)
-    for group, changed in (
-        ("reader", reader_keys),
-        ("datapipe", datapipe_keys),
-        ("model", model_keys),
-    ):
-        b = OmegaConf.to_container(base[group], resolve=True)
-        v = OmegaConf.to_container(variant[group], resolve=True)
-        diff = {k for k in set(b) | set(v) if b.get(k) != v.get(k)}
-        assert diff == set(changed), (group, diff)
-        for k, val in changed.items():
-            assert v[k] == val, (group, k)
-    assert OmegaConf.to_container(
-        variant.training, resolve=True
-    ) == OmegaConf.to_container(base.training, resolve=True)
-    assert variant.experiment_name != base.experiment_name
 
 
 def _compose_public(name):
@@ -957,68 +883,6 @@ def _compose_public(name):
                 "yaris.work_dir=/fixtures/work",
             ],
         )
-
-
-@pytest.mark.parametrize(
-    "name",
-    ["physical", "geo_attn", "geo_knnmpnn", "euclid_attn_doe", "euclid_knnmpnn"],
-)
-def test_stride_one_recipes_change_only_the_time_sampling(name):
-    parent = (
-        "crash_deformer_knn_yaris_tc_loss_physical"
-        if name == "physical"
-        else f"crash_deformer_knn_yaris_tc_{name}"
-    )
-    base = _compose_public(parent)
-    s1 = _compose_public(f"crash_deformer_knn_yaris_tc_s1_{name}")
-    assert s1.yaris.stride == 1 and base.yaris.stride == 5
-    assert s1.training.num_time_steps == 152 and s1.training.epochs == 15
-    assert s1.training.validation_freq == 3 and s1.training.save_checkpoint_freq == 3
-    assert s1.model.dt == 0.001 and s1.datapipe.dt == 0.001 and s1.reader.stride == 1
-    for key in base.training:
-        if key not in (
-            "num_time_steps",
-            "epochs",
-            "validation_freq",
-            "save_checkpoint_freq",
-        ):
-            assert base.training[key] == s1.training[key], key
-    b_model = OmegaConf.to_container(base.model, resolve=True)
-    s_model = OmegaConf.to_container(s1.model, resolve=True)
-    assert {k for k in b_model if b_model[k] != s_model[k]} == {"dt", "num_time_steps"}
-    assert s1.experiment_name != base.experiment_name
-
-
-def test_yaris_tc_stride_one_end_to_end(yaris_root, tmp_path):
-    """Every frame is a pair at stride 1; the exact validation covers all of them."""
-    from yaris_full_trainer import YarisFullTrainer
-
-    from physicsnemo.distributed import DistributedManager
-    from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-
-    cfg = _compose_yaris_tc(
-        yaris_root,
-        tmp_path / "work",
-        extra=["yaris.stride=1", "training.num_time_steps=31", "model.dt=0.001"],
-    )
-    if not DistributedManager.is_initialized():
-        DistributedManager.initialize()
-    logger0 = RankZeroLoggingWrapper(
-        PythonLogger("yaris-s1-test"), DistributedManager()
-    )
-    trainer = YarisFullTrainer(cfg, logger0)
-    assert trainer.rollout_steps == 30
-    # 3 training cases x 30 future frames (B_2 is shorter but is a validation case).
-    assert len(trainer.dataloader.dataset) == 3 * 30
-    sample = next(iter(trainer.dataloader))[0]
-    assert torch.isfinite(trainer.train(sample, 0))
-    stats = trainer.validate(0)
-    assert stats["MSE_w_time"].shape == (30,)
-    payload = json.loads(
-        (tmp_path / "work" / "validation" / "epoch_0001.json").read_text()
-    )
-    assert payload["target_time_ms"][:3] == [2.0, 3.0, 4.0]
-    assert payload["nodes_per_time"][-1] == NODES - 3  # only B_1 reaches frame 30
 
 
 def test_contact_faces_from_shell_connectivity(yaris_root):
@@ -1052,28 +916,6 @@ def test_contact_faces_from_shell_connectivity(yaris_root):
     )  # ids shift by one
 
 
-def test_rigid_wall_contact_encoder():
-    from rigid_wall_contact import RigidWallContactEncoder
-
-    encoder = RigidWallContactEncoder(axis=0, sign=1.0, activation_distance=5.0)
-    positions = torch.tensor(
-        [[90.0, 0, 0], [98.0, 1, 0], [100.0, 0, 1], [101.0, 0, 0], [50.0, 0, 0]]
-    )
-    thickness = torch.tensor([1.0, 1.0, 2.0, 1.0, 1.0])
-    gap = encoder.signed_gap(positions, thickness, 100.0)
-    torch.testing.assert_close(gap, torch.tensor([9.5, 1.5, -1.0, -1.5, 49.5]))
-    graph = encoder(positions, thickness, 100.0)
-    assert graph.edge_index.tolist() == [[1, 2, 3], [1, 2, 3]]
-    assert graph.obstacle_mask.all() and graph.edge_features.shape == (3, 8)
-    assert graph.edge_weights.min() > 0 and graph.edge_weights.max() <= 1
-    # Displacement points from the node to the wall surface along +x for a node
-    # still in front of it, and back toward the wall for one that passed it.
-    assert graph.edge_features[0, 0] > 0 and graph.edge_features[2, 0] < 0
-    assert encoder(positions[4:], thickness[4:], 100.0).edge_index.shape[1] == 0
-    with pytest.raises(ValueError):
-        RigidWallContactEncoder(axis=3)
-
-
 def test_yaris_contact_dataset_graph(yaris_root, tmp_path):
     from surface_topology import SurfaceContactData
     from yaris_full import YarisFullGraphDataset, YarisFullReader
@@ -1101,7 +943,6 @@ def test_yaris_contact_dataset_graph(yaris_root, tmp_path):
     )
     assert graph.contact_surface_exclusions.shape[0] == 2
     assert graph.contact_surface_exclusions.shape[1] > len(graph.contact_faces)
-    assert graph.penetration_reference_positions.shape == (NODES - 3, 3)
     assert graph.rigid_wall.tolist() == [60.0]
     assert any(
         p.name.startswith("contact_one_ring_") for p in (tmp_path / "stats").iterdir()
@@ -1110,837 +951,131 @@ def test_yaris_contact_dataset_graph(yaris_root, tmp_path):
     assert sample.graph.contact_faces is graph.contact_faces
 
 
-def test_yaris_tc_contact_both_end_to_end(yaris_root, tmp_path):
-    """Surface + wall contact on the provisional shape, wall clamp on the output."""
+def test_per_step_lr_warmup(yaris_root, tmp_path):
+    """training.lr_warmup_epochs: linear per-step rise over the warm-up epochs,
+    then the cosine from the base rate to end_lr over the remaining epochs."""
     from yaris_full_trainer import YarisFullTrainer
 
     from physicsnemo.distributed import DistributedManager
     from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
     cfg = _compose_yaris_tc(
-        yaris_root,
-        tmp_path / "work",
-        extra=[
-            "datapipe.contact_surface=true",
-            "datapipe.rigid_wall_position=60.0",
-            "model.use_contact=true",
-            "model.contact_source=both",
-            "model.clamp_to_wall=true",
-            "+model.contact_search_implementation=torch",
-        ],
+        yaris_root, tmp_path / "work", extra=["training.lr_warmup_epochs=2"]
     )
     if not DistributedManager.is_initialized():
         DistributedManager.initialize()
-    logger0 = RankZeroLoggingWrapper(
-        PythonLogger("yaris-contact-test"), DistributedManager()
-    )
+    logger0 = RankZeroLoggingWrapper(PythonLogger("yaris-warmup"), DistributedManager())
     trainer = YarisFullTrainer(cfg, logger0)
-    model = trainer.model
-    assert model.node_contact_builder is not None and model.wall_contact is not None
+    steps = len(trainer.dataloader)
+    base = {id(g): g["initial_lr"] for g in trainer.optimizer.param_groups}
+    assert steps == 18 and all(v == cfg.training.start_lr for v in base.values())
     sample = next(iter(trainer.dataloader))[0]
-    loss = trainer.train(sample, 0)
-    assert torch.isfinite(loss)
-    stats = trainer.validate(0)
-    assert torch.isfinite(stats["MSE"])
-    # The clamp holds on a direct query: no predicted x beyond the wall.
-    model.eval()
-    with torch.no_grad():
-        out = model._at_time(sample, trainer.data_stats)
-    std = trainer.data_stats["node"]["pos_std"].reshape(-1)[0]
-    mean = trainer.data_stats["node"]["pos_mean"].reshape(-1)[0]
-    assert (out.prediction[:, 0] * std + mean <= 60.0 + 1e-3).all()
-
-
-@pytest.mark.parametrize(
-    "name, datapipe_keys, source, clamp",
-    [
-        ("surface", {"contact_surface": True}, "surface", False),
-        ("wall", {"rigid_wall_position": 100.0}, "wall", True),
-        ("both", {"contact_surface": True, "rigid_wall_position": 100.0}, "both", True),
-    ],
-)
-def test_yaris_contact_recipes_change_only_contact_keys(
-    name, datapipe_keys, source, clamp
-):
-    base = _compose_public("crash_deformer_knn_yaris_tc_loss_physical")
-    variant = _compose_public(f"crash_deformer_knn_yaris_tc_contact_{name}")
-    b = OmegaConf.to_container(base.datapipe, resolve=True)
-    v = OmegaConf.to_container(variant.datapipe, resolve=True)
-    assert {k for k in set(b) | set(v) if b.get(k) != v.get(k)} == set(datapipe_keys)
-    for k, val in datapipe_keys.items():
-        assert v[k] == val
-    bm = OmegaConf.to_container(base.model, resolve=True)
-    vm = OmegaConf.to_container(variant.model, resolve=True)
-    changed = {k for k in set(bm) | set(vm) if bm.get(k) != vm.get(k)}
-    assert all(
-        k.startswith(("contact_", "use_contact", "node_contact", "wall_", "clamp_"))
-        for k in changed
-    ), changed
-    assert (
-        vm["use_contact"] is True
-        and vm["contact_source"] == source
-        and vm["clamp_to_wall"] is clamp
-    )
-    assert OmegaConf.to_container(
-        variant.training, resolve=True
-    ) == OmegaConf.to_container(base.training, resolve=True)
-    assert variant.experiment_name != base.experiment_name
-
-
-@pytest.mark.parametrize(
-    "name, expected",
-    [
-        (
-            "surface_v2",
-            {
-                "contact_side_from_reference": True,
-                "contact_reference_clearance": 10.0,
-            },
-        ),
-        (
-            "surface_v2_band15",
-            {
-                "contact_side_from_reference": True,
-                "contact_reference_clearance": 20.0,
-                "contact_activation_distance": 15.0,
-                "node_contact_radius": 20.0,
-            },
-        ),
-        (
-            "surface_v2_band10",
-            {
-                "contact_side_from_reference": True,
-                "contact_reference_clearance": 15.0,
-                "contact_activation_distance": 10.0,
-            },
-        ),
-    ],
-)
-def test_yaris_surface_v2_recipes_only_add_builder_options(name, expected):
-    surface = _compose_public("crash_deformer_knn_yaris_tc_contact_surface")
-    variant = _compose_public(f"crash_deformer_knn_yaris_tc_contact_{name}")
-    for group in ("datapipe", "reader"):
-        assert OmegaConf.to_container(
-            getattr(variant, group), resolve=True
-        ) == OmegaConf.to_container(getattr(surface, group), resolve=True), group
-    training = OmegaConf.to_container(variant.training, resolve=True)
-    assert training.pop("validation_penetration") == {
-        "enabled": True,
-        "tolerance_mm": 0.5,
-        "activation_distance_mm": 5.0,
-        "reference_clearance_mm": 10.0,
-        "feature_scale_mm": 10.0,
-    }
-    assert training == OmegaConf.to_container(surface.training, resolve=True)
-    sm = OmegaConf.to_container(surface.model, resolve=True)
-    vm = OmegaConf.to_container(variant.model, resolve=True)
-    assert sm["contact_side_from_reference"] is False
-    assert sm["contact_reference_clearance"] is None
-    changed = {k for k in set(sm) | set(vm) if sm.get(k) != vm.get(k)}
-    assert changed == set(expected), changed
-    for key, value in expected.items():
-        assert vm[key] == value
-    assert variant.experiment_name != surface.experiment_name
-
-
-def test_yaris_penalty_recipe_adds_only_the_penetration_loss():
-    v2 = _compose_public("crash_deformer_knn_yaris_tc_contact_surface_v2")
-    penalty = _compose_public("crash_deformer_knn_yaris_tc_contact_surface_v2_penalty")
-    for group in ("datapipe", "model", "reader"):
-        assert OmegaConf.to_container(
-            getattr(penalty, group), resolve=True
-        ) == OmegaConf.to_container(getattr(v2, group), resolve=True), group
-    base = OmegaConf.to_container(v2.training, resolve=True)
-    with_penalty = OmegaConf.to_container(penalty.training, resolve=True)
-    assert "penetration_loss" not in base and "validation_penetration" in base
-    assert with_penalty.pop("penetration_loss") == {
-        "tolerance_mm": 0.5,
-        "length_scale_mm": 10.0,
-        "max_weight": 1.0,
-        "warmup_epochs": 3,
-        "ramp_epochs": 7,
-    }
-    assert with_penalty == base
-    assert penalty.experiment_name != v2.experiment_name
-
-
-def test_yaris_tc_penalty_end_to_end(yaris_root, tmp_path):
-    """The trainer applies the crossing-aware penalty to the single TC frame."""
-    from yaris_full_trainer import YarisFullTrainer
-
-    from physicsnemo.distributed import DistributedManager
-    from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-
-    cfg = _compose_yaris_tc(
-        yaris_root,
-        tmp_path / "work",
-        extra=[
-            "datapipe.contact_surface=true",
-            "model.use_contact=true",
-            "model.contact_source=surface",
-            "model.contact_side_from_reference=true",
-            "model.contact_reference_clearance=10.0",
-            "+model.contact_search_implementation=torch",
-            "+training.penetration_loss.tolerance_mm=0.5",
-            "+training.penetration_loss.length_scale_mm=10.0",
-            "+training.penetration_loss.max_weight=1.0",
-            "+training.penetration_loss.warmup_epochs=0",
-            "+training.penetration_loss.ramp_epochs=0",
-            "+training.validation_penetration.enabled=true",
-            "+training.validation_penetration.implementation=torch",
-            "+training.validation_penetration.tolerance_mm=0.0",
-            "+training.validation_node_errors=true",
-        ],
-    )
-    if not DistributedManager.is_initialized():
-        DistributedManager.initialize()
-    logger0 = RankZeroLoggingWrapper(
-        PythonLogger("yaris-penalty-test"), DistributedManager()
-    )
-    trainer = YarisFullTrainer(cfg, logger0)
-    assert trainer.penetration_cfg is not None
-    sample = next(iter(trainer.dataloader))[0]
-    loss = trainer.train(sample, 0)
-    assert torch.isfinite(loss)
-    components = trainer.last_loss_components
-    assert components["penetration_weight"] == 1.0
-    assert "penetration" in components and torch.isfinite(components["penetration"])
-    assert "penetration_crossed_pairs" in components
-    assert torch.isfinite(trainer.validate(0)["MSE"])
-    # The validation probe scored prediction and target on every step.
-    record = json.loads((trainer.validation_dir / "epoch_0001.json").read_text())
-    probe = record["penetration"]
-    assert probe["complete"] is True and probe["side_from_reference"] is True
-    horizon = len(record["vector_RMSE_mm_per_time"])
-    for name in ("prediction", "target"):
-        assert len(probe[name]["crossed_pairs_per_time"]) == horizon
-        assert 0.0 <= probe[name]["penetrating_node_fraction"] <= 1.0
-        assert math.isfinite(probe[name]["mean_depth_mm"])
-    # Per-node RMSE over every validated frame, consistent with the pooled RMSE.
-    import numpy as np
-
-    node_rmse = np.load(trainer.validation_dir / "node_rmse_epoch_0001.npy")
-    assert node_rmse.shape == (trainer.validation_dataset.num_nodes,)
-    pooled = math.sqrt(float(np.mean(node_rmse.astype(np.float64) ** 2)))
-    assert abs(pooled - record["vector_RMSE_mm"]) < 1e-3 * max(1.0, pooled)
-    meta = np.load(trainer.validation_dir / "node_meta.npz")
-    assert meta["reference"].shape == (len(node_rmse), 3)
-    assert meta["part_id"].shape == (len(node_rmse),)
-    # Regional translational breakdown: the mean-error part never exceeds the MSE.
-    regions = record["regions"]
-    per_case = regions.pop("per_case_mean_error_mm")
-    assert (
-        len(per_case) == len(record["cases"]) and per_case[0]["case"] in record["cases"]
-    )
-    assert len(per_case[0]["mean_error_mm"]) == 3
-    assert len(regions) == 3 and sum(r["nodes"] for r in regions.values()) == len(
-        node_rmse
-    )
-    for region in regions.values():
-        if region["nodes"]:
-            assert 0.0 <= region["translational_share"] <= 1.0 + 1e-9
-            assert len(region["rmse_mm_per_time"]) == horizon
-
-
-def test_yaris_iter2_recipe_changes_only_the_pass_count():
-    v2 = _compose_public("crash_deformer_knn_yaris_tc_contact_surface_v2")
-    iter2 = _compose_public("crash_deformer_knn_yaris_tc_contact_surface_v2_iter2")
-    for group in ("datapipe", "training", "reader"):
-        assert OmegaConf.to_container(
-            getattr(iter2, group), resolve=True
-        ) == OmegaConf.to_container(getattr(v2, group), resolve=True), group
-    vm = OmegaConf.to_container(v2.model, resolve=True)
-    im = OmegaConf.to_container(iter2.model, resolve=True)
-    assert vm["contact_iterations"] == 1 and im["contact_iterations"] == 2
-    assert {k for k in set(vm) | set(im) if vm.get(k) != im.get(k)} == {
-        "contact_iterations"
-    }
-    assert iter2.experiment_name != v2.experiment_name
-
-
-@pytest.mark.parametrize(
-    "name, base, extra_datapipe",
-    [
-        (
-            "crash_deformer_knn_yaris_tc_contact_surface_v2_ft",
-            "crash_deformer_knn_yaris_tc_contact_surface_v2",
-            {},
-        ),
-        (
-            "crash_deformer_knn_yaris_tc_loss_physical_ft",
-            "crash_deformer_knn_yaris_tc_loss_physical",
-            {"contact_surface": True},
-        ),
-    ],
-)
-def test_fine_tune_recipes_change_only_the_schedule(name, base, extra_datapipe):
-    base_cfg = _compose_public(base)
-    ft = _compose_public(name)
-    assert OmegaConf.to_container(ft.model, resolve=True) == OmegaConf.to_container(
-        base_cfg.model, resolve=True
-    )
-    bd = OmegaConf.to_container(base_cfg.datapipe, resolve=True)
-    fd = OmegaConf.to_container(ft.datapipe, resolve=True)
-    assert {k for k in set(bd) | set(fd) if bd.get(k) != fd.get(k)} == set(
-        extra_datapipe
-    )
-    bt = OmegaConf.to_container(base_cfg.training, resolve=True)
-    ftt = OmegaConf.to_container(ft.training, resolve=True)
-    assert ftt.pop("warm_start_model") is None
-    assert (ftt.pop("epochs"), ftt.pop("start_lr"), ftt.pop("end_lr")) == (
-        10,
-        2.0e-5,
-        1.0e-6,
-    )
-    assert (ftt.pop("validation_freq"), ftt.pop("save_checkpoint_freq")) == (2, 2)
-    for key in (
-        "epochs",
-        "start_lr",
-        "end_lr",
-        "validation_freq",
-        "save_checkpoint_freq",
-    ):
-        bt.pop(key)
-    probe = ftt.pop("validation_penetration")
-    assert probe["enabled"] is True and probe["reference_clearance_mm"] == 10.0
-    bt.pop("validation_penetration", None)
-    assert ftt == bt
-    assert ft.experiment_name != base_cfg.experiment_name
-
-
-def test_global_motion_recipes_change_only_the_head_and_the_schedule():
-    control = _compose_public("crash_deformer_knn_yaris_tc_loss_physical")
-    gm = _compose_public("crash_deformer_knn_yaris_tc_global_motion")
-    for group in ("datapipe", "training", "reader"):
-        assert OmegaConf.to_container(
-            getattr(gm, group), resolve=True
-        ) == OmegaConf.to_container(getattr(control, group), resolve=True), group
-    cm = OmegaConf.to_container(control.model, resolve=True)
-    gmm = OmegaConf.to_container(gm.model, resolve=True)
-    assert cm["global_motion"] is False and gmm["global_motion"] is True
-    assert {k for k in set(cm) | set(gmm) if cm.get(k) != gmm.get(k)} == {
-        "global_motion"
-    }
-    ft = _compose_public("crash_deformer_knn_yaris_tc_global_motion_ft")
-    assert OmegaConf.to_container(ft.model, resolve=True) == gmm
-    ftt = OmegaConf.to_container(ft.training, resolve=True)
-    assert ftt.pop("warm_start_model") is None
-    assert (ftt.pop("epochs"), ftt.pop("start_lr"), ftt.pop("end_lr")) == (
-        10,
-        2.0e-5,
-        1.0e-6,
-    )
-    assert (ftt.pop("validation_freq"), ftt.pop("save_checkpoint_freq")) == (2, 2)
-    base = OmegaConf.to_container(control.training, resolve=True)
-    for key in (
-        "epochs",
-        "start_lr",
-        "end_lr",
-        "validation_freq",
-        "save_checkpoint_freq",
-    ):
-        base.pop(key)
-    assert ftt == base
-
-
-def test_thickness_deviation_feature_and_recipe(yaris_root, tmp_path):
-    """Fleet-mean thickness from the training cases; second feature column."""
-    from yaris_full_trainer import YarisFullTrainer
-
-    from physicsnemo.distributed import DistributedManager
-    from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-
-    control = _compose_public("crash_deformer_knn_yaris_tc_loss_physical")
-    recipe = _compose_public("crash_deformer_knn_yaris_tc_thickness_dev")
-    assert recipe.datapipe.thickness_deviation is True
-    assert control.datapipe.thickness_deviation is False
-    assert recipe.model.functional_dim == control.model.functional_dim + 1
-    assert OmegaConf.to_container(
-        recipe.training, resolve=True
-    ) == OmegaConf.to_container(control.training, resolve=True)
-    tiny = _compose_yaris_tc(yaris_root, tmp_path / "work")
-    cfg = _compose_yaris_tc(
-        yaris_root,
-        tmp_path / "work",
-        extra=[
-            "datapipe.thickness_deviation=true",
-            f"model.functional_dim={int(tiny.model.functional_dim) + 1}",
-        ],
-    )
-    if not DistributedManager.is_initialized():
-        DistributedManager.initialize()
-    logger0 = RankZeroLoggingWrapper(
-        PythonLogger("yaris-thickness-dev"), DistributedManager()
-    )
-    trainer = YarisFullTrainer(cfg, logger0)
-    dataset = trainer.dataloader.dataset
-    assert dataset.thickness_fleet_mean.shape == (dataset.num_nodes,)
-    cache = list((tmp_path / "work").rglob("thickness_fleet_*.npz"))
-    assert len(cache) == 1
-    sample = next(iter(trainer.dataloader))[0]
-    features = sample.node_features["features"]
-    assert features.shape == (dataset.num_nodes, 2) and torch.isfinite(features).all()
-    # The deviation column is zero where the node's thickness equals the fleet mean.
-    import numpy as np
-
-    store = dataset.reader.open(dataset.paths[0])
-    thickness = torch.from_numpy(dataset.reader.thickness(store))
-    same = thickness == dataset.thickness_fleet_mean
-    assert torch.all(features[same, 1] == 0)
-    loss = trainer.train(sample, 0)
-    assert torch.isfinite(loss)
-    assert torch.isfinite(trainer.validate(0)["MSE"])
-    assert np.load(cache[0])["dev_std"] >= 0
-
-
-def test_ema_weights_track_training_and_are_used_for_validation(yaris_root, tmp_path):
-    from yaris_full_trainer import YarisFullTrainer
-
-    from physicsnemo.distributed import DistributedManager
-    from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-
-    recipe = _compose_public("crash_deformer_knn_yaris_tc_ema")
-    assert recipe.training.ema_decay == 0.999
-    cfg = _compose_yaris_tc(
-        yaris_root, tmp_path / "work", extra=["+training.ema_decay=0.5"]
-    )
-    if not DistributedManager.is_initialized():
-        DistributedManager.initialize()
-    logger0 = RankZeroLoggingWrapper(PythonLogger("yaris-ema"), DistributedManager())
-    trainer = YarisFullTrainer(cfg, logger0)
-    assert trainer.ema_model is not None
-    model = trainer._unwrapped_model()
-    before = [p.detach().clone() for p in model.parameters()]
-    for p, q in zip(model.parameters(), trainer.ema_model.parameters()):
-        assert torch.equal(p, q)
-    loader = iter(trainer.dataloader)
-    for step in range(2):
-        trainer.train(next(loader)[0], 0)
-    assert trainer.ema_updates == 2
-    after = [p.detach().clone() for p in model.parameters()]
-    moved = [i for i, (a, b) in enumerate(zip(before, after)) if not torch.equal(a, b)]
-    assert moved
-    # EMA lies between the start and the trained weights, strictly inside.
-    i = moved[0]
-    ema = list(trainer.ema_model.parameters())[i]
-    assert not torch.equal(ema, after[i]) and not torch.equal(ema, before[i])
-    # Validation swaps the EMA weights in and restores the trained ones after.
-    with trainer.ema_weights():
-        assert torch.equal(list(model.parameters())[i], ema)
-    assert torch.equal(list(model.parameters())[i], after[i])
-    assert torch.isfinite(trainer.validate(0)["MSE"])
-    trainer.save_ema(1)
-    path = trainer._ema_path(cfg.training.ckpt_path, 1)
-    assert path.exists()
-    # Resuming at that epoch restores the EMA copy from the file.
-    from utils import load_warm_start
-
-    fresh = _compose_yaris_tc(
-        yaris_root, tmp_path / "work", extra=["+training.ema_decay=0.5"]
-    )
-    probe = YarisFullTrainer(fresh, logger0)
-    load_warm_start(probe.ema_model, path, allowed_missing_prefixes=())
-    assert torch.equal(list(probe.ema_model.parameters())[i], ema)
-    with pytest.raises(ValueError, match="ema_decay"):
+    # Linear per-step rise over the two warmup epochs.
+    for k in range(1, 4):
+        trainer.train(sample, 0)
+        for g in trainer.optimizer.param_groups:
+            assert g["lr"] == pytest.approx(base[id(g)] * k / (2 * steps))
+    trainer.scheduler.step()  # end of epoch 0: the factor is 1 inside the warmup
+    trainer.train(sample, 1)
+    for g in trainer.optimizer.param_groups:
+        assert g["lr"] == pytest.approx(base[id(g)] * (steps + 1) / (2 * steps))
+    # After the warmup the cosine runs from the base rate to end_lr over the
+    # remaining epochs, reaching end_lr after the last one.
+    trainer.scheduler.step()
+    trainer.train(sample, 2)
+    for g in trainer.optimizer.param_groups:
+        assert g["lr"] == pytest.approx(base[id(g)])
+    for _ in range(cfg.training.epochs - 2):
+        trainer.scheduler.step()
+    for g in trainer.optimizer.param_groups:
+        assert g["lr"] == pytest.approx(cfg.training.end_lr, rel=1e-6)
+    with pytest.raises(ValueError, match="lr_warmup_epochs"):
         YarisFullTrainer(
             _compose_yaris_tc(
-                yaris_root, tmp_path / "work", extra=["+training.ema_decay=1.0"]
+                yaris_root,
+                tmp_path / "work",
+                extra=[f"training.lr_warmup_epochs={cfg.training.epochs}"],
             ),
             logger0,
         )
 
 
-def test_design_mixup_blends_two_training_cases(yaris_root, tmp_path):
-    recipe = _compose_public("crash_deformer_knn_yaris_tc_mixup")
-    assert recipe.datapipe.mixup_alpha == 1.0 and recipe.datapipe.mixup_prob == 0.5
-    cfg = _compose_yaris_tc(
+def test_yaris_mesh_edges_on_the_graph(yaris_root, tmp_path):
+    """datapipe.mesh_edges: structural connectivity in both directions with
+    standardized reference features, next to an unchanged (empty) edge_index."""
+    from yaris_full import YarisFullGraphDataset, YarisFullReader
+
+    reader = YarisFullReader(yaris_root / "splits.csv", yaris_root / "outliers.npz")
+    dataset = YarisFullGraphDataset(
+        reader,
+        yaris_root,
+        num_samples=3,
+        num_steps=7,
+        split="train",
+        stats_dir=tmp_path / "stats",
+        stats_mode="compute",
+        sample_type="one_time_step",
+        initial_history_steps=1,
+        local_knn_k=4,
+        local_knn_metric="euclidean",
+        local_knn_cache_dir=tmp_path / "cache",
+        mesh_edges=True,
+    )
+    graph = dataset.graph
+    assert graph.edge_index.shape == (2, 0)
+    index = graph.mesh_edge_index
+    assert index.shape[0] == 2 and index.shape[1] > 0 and index.shape[1] % 2 == 0
+    pairs = {tuple(e) for e in index.t().tolist()}
+    assert pairs == {(b, a) for a, b in pairs}
+    assert (index[0] != index[1]).all()
+    attr = graph.mesh_edge_attr
+    assert attr.shape == (index.shape[1], 4)
+    assert torch.allclose(attr.mean(dim=0), torch.zeros(4), atol=1e-4)
+    assert torch.allclose(attr.std(dim=0, unbiased=False), torch.ones(4), atol=1e-3)
+    assert graph.mesh_edge_mean.shape == (4,) and graph.mesh_edge_std.shape == (4,)
+    assert (graph.mesh_edge_std > 0).all()
+    sample = dataset[0]
+    assert sample.graph.mesh_edge_index is graph.mesh_edge_index
+
+
+def test_frame_pairs_serve_two_consecutive_frames(yaris_root, tmp_path):
+    """datapipe.frame_pairs: the target holds frames k and k+1 under the earlier
+    frame's label, the last frame pairs backwards, validation ignores the flag."""
+    cfg = _compose(
         yaris_root,
         tmp_path / "work",
-        extra=["datapipe.mixup_alpha=1.0", "datapipe.mixup_prob=1.0"],
+        [
+            "datapipe.sample_type=one_time_step",
+            "datapipe.initial_history_steps=1",
+            "datapipe.frame_pairs=true",
+        ],
     )
-    from hydra.utils import instantiate
-
     reader = instantiate(cfg.reader)
     dataset = instantiate(
-        cfg.datapipe,
-        name="crash_train",
-        reader=reader,
-        split="train",
-        stats_mode="compute",
-        sample_type="one_time_step",
-        data_dir=cfg.training.raw_data_dir,
-        num_samples=cfg.training.num_training_samples,
+        cfg.datapipe, reader=reader, split="train", stats_mode="compute"
     )
-    dataset.set_epoch(0)
-    sample = dataset[0]
-    assert sample.yaris_mixup is not None
-    partner, lam = sample.yaris_mixup
-    assert 0.0 <= lam <= 1.0 and "+" in sample.yaris_case_name
-    case, k = dataset._pair(0)
-    assert partner != case
-    # Rebuild the blend from the two stores.
-    plain = instantiate(
+    assert dataset.frame_pairs is True and len(dataset) == 18
+    kept = NODES - 3
+    first = dataset[0]
+    assert first.node_target.shape == (kept, 2, 3)
+    assert first.yaris_target_frames == [5, 10]
+    assert first.node_features["time"].item() == 0.0
+    single = instantiate(
+        cfg.datapipe, reader=reader, split="train", stats_mode="load", frame_pairs=False
+    )
+    torch.testing.assert_close(first.node_target[:, 0], single[0].node_target)
+    torch.testing.assert_close(first.node_target[:, 1], single[1].node_target)
+    last = dataset[5]  # k = 5 is the case's last future frame: the pair is (4, 5)
+    assert last.yaris_target_frames == [25, 30]
+    assert last.node_features["time"].item() == pytest.approx(4 / 6)
+    torch.testing.assert_close(last.node_target, dataset[4].node_target)
+    validation = instantiate(
         cfg.datapipe,
-        name="crash_train_plain",
         reader=reader,
-        split="train",
+        split="validation",
         stats_mode="load",
-        sample_type="one_time_step",
-        data_dir=cfg.training.raw_data_dir,
-        num_samples=cfg.training.num_training_samples,
-        mixup_alpha=0.0,
+        sample_type="all_time_steps",
+        num_samples=2,
     )
-    own = plain[0]
-    other_index = plain.case_offsets[partner] + k
-    other = plain[other_index]
-    torch.testing.assert_close(
-        sample.node_target, lam * own.node_target + (1 - lam) * other.node_target
-    )
-    torch.testing.assert_close(
-        sample.node_features["features"],
-        lam * own.node_features["features"]
-        + (1 - lam) * other.node_features["features"],
-    )
-    torch.testing.assert_close(
-        sample.node_features["coords"], own.node_features["coords"]
-    )
-    # Same draw again (stateless in seed, epoch, index); a new epoch may differ.
-    assert dataset[0].yaris_mixup == sample.yaris_mixup
-    from hydra.errors import InstantiationException
-
-    with pytest.raises((ValueError, InstantiationException), match="mixup"):
-        instantiate(
-            cfg.datapipe,
-            name="bad",
-            reader=reader,
-            split="train",
-            stats_mode="load",
-            sample_type="one_time_step",
-            data_dir=cfg.training.raw_data_dir,
-            num_samples=cfg.training.num_training_samples,
-            mixup_alpha=-1.0,
-        )
-
-
-def test_mean_displacement_baseline_is_prepared_served_and_added(yaris_root, tmp_path):
-    from hydra.utils import instantiate
-    from yaris_full_trainer import YarisFullTrainer
-
-    from physicsnemo.distributed import DistributedManager
-    from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-
-    assert _compose_public(
-        "crash_deformer_knn_yaris_tc_baseline"
-    ).datapipe.mean_displacement_baseline
-    cfg = _compose_yaris_tc(
-        yaris_root,
-        tmp_path / "work",
-        extra=["datapipe.mean_displacement_baseline=true"],
-    )
-    reader = instantiate(cfg.reader)
-    # Loading before preparation is an explicit error.
-    with pytest.raises(Exception, match="mean_displacement"):
-        instantiate(
-            cfg.datapipe,
-            name="early",
-            reader=reader,
-            split="train",
-            stats_mode="load",
-            sample_type="one_time_step",
-            data_dir=cfg.training.raw_data_dir,
-            num_samples=cfg.training.num_training_samples,
-        )
-    train = instantiate(
-        cfg.datapipe,
-        name="train",
-        reader=reader,
-        split="train",
-        stats_mode="compute",
-        sample_type="one_time_step",
-        data_dir=cfg.training.raw_data_dir,
-        num_samples=cfg.training.num_training_samples,
-    )
-    steps = train.num_steps - 1
-    assert train.mean_displacement.shape == (steps, train.num_nodes, 3)
-    assert len(list((tmp_path / "work").rglob("mean_displacement_*.npy"))) == 1
-    # k = 0 baseline equals the mean over the training cases of (frame 1 - frame 0) / std.
-    expected = []
-    for path in reader.paths(
-        cfg.training.raw_data_dir, "train", len(reader.splits["train"])
-    ):
-        store = reader.open(path)
-        frames = reader.frames(store)
-        coords = reader.coordinates(store, frames[:2]).astype(np.float64)
-        expected.append(coords[1] - coords[0])
-    expected = np.mean(expected, axis=0) / (train.node_stats["pos_std"].numpy() + 1e-8)
-    torch.testing.assert_close(
-        train.mean_displacement[0], torch.as_tensor(expected, dtype=torch.float32)
-    )
-    sample = train[0]
-    torch.testing.assert_close(
-        sample.node_features["baseline"], train.mean_displacement[0]
-    )
-    # The trainer path: zero-initialised heads predict coords + baseline exactly,
-    # one validation frame per baseline frame.
-    if not DistributedManager.is_initialized():
-        DistributedManager.initialize()
-    logger0 = RankZeroLoggingWrapper(
-        PythonLogger("yaris-baseline"), DistributedManager()
-    )
-    trainer = YarisFullTrainer(cfg, logger0)
-    held = next(iter(trainer.val_dataloader))[0]
-    assert held.node_features["baseline_all"].shape == (
-        train.num_nodes,
-        held.node_target.shape[1],
-        3,
-    )
-    model = trainer.model
-    model.train()
-    batch = next(iter(trainer.dataloader))[0]
-    with torch.no_grad():
-        out = model(sample=batch, data_stats=trainer.data_stats, return_auxiliary=True)
-    torch.testing.assert_close(
-        out.coarse_prediction,
-        batch.node_features["coords"] + batch.node_features["baseline"],
-    )
-    model.eval()
-    with torch.no_grad():
-        rollout = model(sample=held, data_stats=trainer.data_stats)
-    torch.testing.assert_close(
-        rollout,
-        held.node_features["coords"][:, None, :] + held.node_features["baseline_all"],
-    )
-    assert "baseline" not in held.node_features
-    model.train()
-    assert torch.isfinite(trainer.train(batch, 0))
-    assert torch.isfinite(trainer.validate(0)["MSE"])
-
-
-def test_concrete_dropout_recipe_trains_with_the_regulariser(yaris_root, tmp_path):
-    from yaris_full_trainer import YarisFullTrainer
-
-    from physicsnemo.distributed import DistributedManager
-    from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-
-    recipe = _compose_public("crash_deformer_knn_yaris_tc_concrete_dropout")
-    assert recipe.model.concrete_dropout is True and recipe.model.dropout == 0.1
-    assert recipe.training.concrete_dropout_lambda == 1.0e-4
-    cfg = _compose_yaris_tc(
-        yaris_root,
-        tmp_path / "work",
-        extra=[
-            "model.concrete_dropout=true",
-            "model.dropout=0.1",
-            "+training.concrete_dropout_lambda=1e-3",
-        ],
-    )
-    if not DistributedManager.is_initialized():
-        DistributedManager.initialize()
-    logger0 = RankZeroLoggingWrapper(
-        PythonLogger("yaris-concrete"), DistributedManager()
-    )
-    trainer = YarisFullTrainer(cfg, logger0)
-    rates = trainer.concrete_dropout_rates()
-    assert rates and all(abs(r - 0.1) < 1e-5 for r in rates.values())
-    sample = next(iter(trainer.dataloader))[0]
-    loss = trainer.train(sample, 0)
-    assert torch.isfinite(loss)
-    assert "concrete_dropout" in trainer.last_loss_components
-    assert torch.isfinite(trainer.validate(0)["MSE"])
-
-
-def test_delta_reference_pairs_designs_and_averages_validation_references(
-    yaris_root, tmp_path
-):
-    from hydra.utils import instantiate
-    from yaris_full_trainer import YarisFullTrainer
-
-    from physicsnemo.distributed import DistributedManager
-    from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-
-    recipe = _compose_public("crash_deformer_knn_yaris_tc_delta")
-    assert recipe.datapipe.delta_reference is True and recipe.model.functional_dim == 37
-    tiny = _compose_yaris_tc(yaris_root, tmp_path / "work")
-    cfg = _compose_yaris_tc(
-        yaris_root,
-        tmp_path / "work",
-        extra=[
-            "datapipe.delta_reference=true",
-            "datapipe.delta_val_references=2",
-            f"model.functional_dim={int(tiny.model.functional_dim) + 1}",
-        ],
-    )
-    reader = instantiate(cfg.reader)
-    train = instantiate(
-        cfg.datapipe,
-        name="train",
-        reader=reader,
-        split="train",
-        stats_mode="compute",
-        sample_type="one_time_step",
-        data_dir=cfg.training.raw_data_dir,
-        num_samples=cfg.training.num_training_samples,
-    )
-    assert len(list((tmp_path / "work").rglob("delta_neighbours_*.json"))) == 1
-    sample = train[0]
-    case, k = train._pair(0)
-    own = train.paths[case].stem
-    reference = sample.yaris_delta_reference
-    assert reference in train.delta_neighbours["train_cases"] and reference != own
-    assert sample.node_features["features"].shape == (train.num_nodes, 2)
-    # The baseline is the reference design's displacement at the same frame.
-    store = reader.open(train.delta_neighbours["train_paths"][reference])
-    frames = reader.frames(store)
-    pos = torch.from_numpy(reader.coordinates(store, [frames[0], frames[1 + k]]))
-    expected = (pos[1] - pos[0]) / (train.node_stats["pos_std"] + 1e-8)
-    torch.testing.assert_close(sample.node_features["baseline"], expected)
-    assert train[0].yaris_delta_reference == reference  # stateless draw
-    # Validation: nearest training designs, extra references carried on the sample.
-    if not DistributedManager.is_initialized():
-        DistributedManager.initialize()
-    logger0 = RankZeroLoggingWrapper(PythonLogger("yaris-delta"), DistributedManager())
-    trainer = YarisFullTrainer(cfg, logger0)
-    held = next(iter(trainer.val_dataloader))[0]
-    assert len(held.yaris_delta_references) == 2 and len(held.delta_references) == 1
-    assert held.node_features["features"].shape == (train.num_nodes, 2)
-    steps = held.node_target.shape[1]
-    assert held.node_features["baseline_all"].shape == (train.num_nodes, steps, 3)
-    assert (
-        held.yaris_delta_references
-        == train.delta_neighbours["nearest"][held.yaris_case_name][:2]
-    )
-    # Zero-initialised heads: the prediction is the mean reference trajectory,
-    # i.e. a nearest-design baseline; the validation path averages the references.
-    from yaris_full_trainer import accumulate_validation
-
-    totals, seen = accumulate_validation(
-        trainer.model.eval(),
-        trainer.val_dataloader,
-        trainer.data_stats,
-        trainer.rollout_steps,
-        trainer.dist.device,
-    )
-    coords = held.node_features["coords"][:, None, :]
-    mean_reference = (
-        coords + (held.node_features["baseline_all"] + held.delta_references[0][1]) / 2
-    )
-    expected_sq = torch.square((mean_reference - held.node_target).double()).sum()
-    assert seen == [held.yaris_case_name] or len(seen) >= 1
-    if seen == [held.yaris_case_name]:
-        torch.testing.assert_close(totals[:steps, :3].sum(), expected_sq)
-    trainer.model.train()
-    assert torch.isfinite(trainer.train(next(iter(trainer.dataloader))[0], 0))
-    assert torch.isfinite(trainer.validate(0)["MSE"])
-    with pytest.raises(Exception, match="delta_reference"):
-        instantiate(
-            cfg.datapipe,
-            name="bad",
-            reader=reader,
-            split="train",
-            stats_mode="load",
-            sample_type="one_time_step",
-            data_dir=cfg.training.raw_data_dir,
-            num_samples=cfg.training.num_training_samples,
-            mixup_alpha=1.0,
-        )
-
-
-def test_local_dropout_recipe_and_node_subset_loss(yaris_root, tmp_path):
-    from yaris_full_trainer import YarisFullTrainer
-
-    from physicsnemo.distributed import DistributedManager
-    from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-
-    recipe = _compose_public("crash_deformer_knn_yaris_tc_local_dropout")
-    assert (
-        recipe.model.local_concrete_dropout is True
-        and recipe.model.local_dropout == 0.1
-    )
-    assert recipe.training.loss_node_fraction == 0.5
-    cfg = _compose_yaris_tc(
-        yaris_root, tmp_path / "work", extra=["+training.loss_node_fraction=0.5"]
-    )
-    if not DistributedManager.is_initialized():
-        DistributedManager.initialize()
-    logger0 = RankZeroLoggingWrapper(PythonLogger("yaris-subset"), DistributedManager())
-    trainer = YarisFullTrainer(cfg, logger0)
-    sample = next(iter(trainer.dataloader))[0]
-    prediction = sample.node_target + 0.1 * torch.randn_like(sample.node_target)
-    trainer.model.train()
-    torch.manual_seed(0)
-    first = trainer._supervised_position_loss(prediction, sample.node_target, sample)
-    torch.manual_seed(1)
-    second = trainer._supervised_position_loss(prediction, sample.node_target, sample)
-    assert first != second  # different random node subsets
-    trainer.model.eval()
-    full = trainer._supervised_position_loss(prediction, sample.node_target, sample)
-    torch.testing.assert_close(
-        full, trainer.position_loss(prediction, sample.node_target)
-    )
-    trainer.model.train()
-    assert torch.isfinite(trainer.train(sample, 0))
-    with pytest.raises(ValueError, match="loss_node_fraction"):
-        YarisFullTrainer(
-            _compose_yaris_tc(
-                yaris_root, tmp_path / "work", extra=["+training.loss_node_fraction=0"]
-            ),
-            logger0,
-        )
-
-
-def test_part_tokens_pool_features_per_part_and_train(yaris_root, tmp_path):
-    from hydra.utils import instantiate
-    from yaris_full_trainer import YarisFullTrainer
-
-    from physicsnemo.distributed import DistributedManager
-    from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-
-    recipe = _compose_public("crash_deformer_knn_yaris_tc_part_tokens")
-    assert recipe.datapipe.part_tokens and recipe.model.part_tokens
-    assert recipe.model.global_dim == 64 and recipe.model.global_motion is True
-    tiny = _compose_yaris_tc(yaris_root, tmp_path / "work")
-    cfg = _compose_yaris_tc(
-        yaris_root,
-        tmp_path / "work",
-        extra=[
-            "datapipe.part_tokens=true",
-            "model.part_tokens=true",
-            "model.part_token_dim=5",
-            "model.design_dim=8",
-            f"model.global_dim={int(tiny.model.global_dim) + 8}",
-            "model.global_motion=true",
-        ],
-    )
-    reader = instantiate(cfg.reader)
-    train = instantiate(
-        cfg.datapipe,
-        name="train",
-        reader=reader,
-        split="train",
-        stats_mode="compute",
-        sample_type="one_time_step",
-        data_dir=cfg.training.raw_data_dir,
-        num_samples=cfg.training.num_training_samples,
-    )
-    ids = reader.part_ids(reader.open(train.paths[0]))
-    parts = np.unique(ids)
-    sample = train[0]
-    tokens = sample.global_features["parts"]
-    assert tokens.shape == (len(parts), 5)
-    features = sample.node_features["features"]
-    for i, part in enumerate(parts):
-        mask = torch.from_numpy(ids == part)
-        torch.testing.assert_close(tokens[i, 4], features[mask, 0].mean())
-        ref = (torch.from_numpy(reader.reference) - train.node_stats["pos_mean"]) / (
-            train.node_stats["pos_std"] + 1e-8
-        )
-        torch.testing.assert_close(tokens[i, :3], ref[mask].mean(0))
-    assert torch.all(tokens[:, 3] <= 1.0) and torch.all(tokens[:, 3] > 0)
-    if not DistributedManager.is_initialized():
-        DistributedManager.initialize()
-    logger0 = RankZeroLoggingWrapper(PythonLogger("yaris-parts"), DistributedManager())
-    trainer = YarisFullTrainer(cfg, logger0)
-    batch = next(iter(trainer.dataloader))[0]
-    assert "parts" in batch.global_features
-    assert torch.isfinite(trainer.train(batch, 0))
-    assert torch.isfinite(trainer.validate(0)["MSE"])
+    assert validation.frame_pairs is False
+    assert validation[0].node_target.shape == (kept, 6, 3)

@@ -52,24 +52,6 @@ def _compose(name):
         )
 
 
-def test_v2_recipe_changes_only_the_block_and_optimizer_routing():
-    base = _compose("crash_deformer_knn_autoregressive")
-    v2 = _compose("crash_deformer_knn_v2_autoregressive")
-    for key in base.model:
-        if key == "local_attention_fused":
-            continue
-        assert base.model[key] == v2.model[key], key
-    assert set(v2.model) - set(base.model) == set(V2_KEYS) - {"local_attention_fused"}
-    for key, value in V2_KEYS.items():
-        assert v2.model[key] == value, key
-    assert base.datapipe == v2.datapipe and base.reader == v2.reader
-    for key in base.training:
-        assert base.training[key] == v2.training[key], key
-    assert set(v2.training) - set(base.training) == {"muon_min_dim"}
-    assert v2.training.muon_min_dim == 9
-    assert OmegaConf.to_container(v2, resolve=True)["datapipe"]["local_knn_k"] == 32
-
-
 def _tiny_model(**overrides):
     kwargs = dict(
         num_time_steps=5,

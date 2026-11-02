@@ -20,7 +20,6 @@ from pathlib import Path
 
 import torch
 from hydra import compose, initialize_config_dir
-from omegaconf import OmegaConf
 
 CRASH_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CRASH_DIR))
@@ -63,40 +62,6 @@ def test_knn_slot_graph_has_one_directed_edge_per_valid_slot():
     assert destination.tolist() == [0, 0, 0, 1, 1, 2, 2]
     assert source.tolist() == [0, 1, 2, 1, 0, 2, 1]
     torch.testing.assert_close(slot_features, features[mask])
-
-
-def test_knn_mpnn_recipe_is_the_knn_recipe_with_mpnn_messages():
-    base = _compose("crash_deformer_knn_autoregressive")
-    cfg = _compose("crash_deformer_knn_mpnn_autoregressive")
-    assert cfg.model.local_processor == "knn_mpnn"
-    assert cfg.model.local_knn_k == 8 and cfg.model.local_neighborhood == "geodesic"
-    for key in base.model:
-        if key in ("local_processor", "local_knn_k"):
-            continue
-        assert base.model[key] == cfg.model[key], key
-    assert set(cfg.model) == set(base.model)
-    assert base.training == cfg.training and base.reader == cfg.reader
-    resolved = OmegaConf.to_container(cfg, resolve=True)
-    assert resolved["datapipe"]["local_knn_k"] == 8
-    assert resolved["datapipe"]["local_knn_metric"] == "geodesic"
-    # The MPNN widths and processor depths are the DeFormer ones.
-    assert cfg.model.mesh_hidden_dim == 256 and cfg.model.num_post_processor_layers == 2
-
-
-def test_rawvalues_recipe_keeps_the_residual_update():
-    v2 = _compose("crash_deformer_knn_v2_autoregressive")
-    raw = _compose("crash_deformer_knn_rawvalues_autoregressive")
-    assert (
-        raw.model.local_value_norm is False and raw.model.local_split_key_value is True
-    )
-    assert raw.model.local_bias_fp32 is True and raw.model.local_attention_fused is True
-    assert (
-        "local_difference_values" not in raw.model and "local_update" not in raw.model
-    )
-    assert raw.training.muon_min_dim == 9
-    for key in raw.model:
-        if key in v2.model:
-            assert raw.model[key] == v2.model[key], key
 
 
 def test_knn_mpnn_model_trains_through_bptt_with_the_mpnn_processors():

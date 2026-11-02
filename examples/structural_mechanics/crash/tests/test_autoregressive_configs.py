@@ -32,13 +32,14 @@ AUTOREGRESSIVE_CONFIGS = (
     "crash_deformer_contact_autoregressive",
 )
 
-# Effective recipes captured before config consolidation (revision d66b58ad).
-# Exclude experiment_name and the later, explicitly checked default-off XYZ
-# switch; retain the historical digests for all original recipe settings.
+# Effective recipes captured before the config consolidation. Exclude
+# experiment_name and the later, explicitly checked default-off XYZ switch. The
+# digests were re-pinned when the shared training and inference groups declared
+# their previously implicit override keys at their default values.
 REFERENCE_DIGESTS = (
-    "f7433cc0e7f412241a9978eac54ed2aa887e04bd65ed13775658262c9819534c",
-    "8f5f60a9c8d74213051dd9003282b709de725a0f157b2880350a05ffcc3a2296",
-    "cc976b6cb805164a10cdb55415950061be8356cbead2e2c0533da0f66d3b4781",
+    "89179d11baecb00e0e5d20e670bb174c7fbcfc2d8d9db7a8cf6c2dc5088c6f9e",
+    "b98cee0abd512d5f2c7031cab78f17d7a0bf898a8d391e9490afd05a33dfd502",
+    "498c58730b2e60f4f7fc8096daff9275e92ba501c2d77d6cfd75f909a10befc9",
 )
 
 
@@ -77,8 +78,11 @@ def _compose(name, overrides=()):
 def test_all_public_experiments_compose(name):
     """Every advertised experiment has a complete Hydra defaults tree."""
     config = _compose(name)
-    # Rollout wrappers live in rollout.py; the time-conditional DeFormer in time_conditional.py.
-    assert config.model._target_.startswith(("rollout.", "time_conditional."))
+    # Rollout wrappers live in rollout.py, the time-conditional DeFormer in
+    # time_conditional.py and its corrector in residual_model.py.
+    assert config.model._target_.startswith(
+        ("rollout.", "time_conditional.", "residual_model.")
+    )
     # Crash datapipes live in datapipe.py; the full-mesh Yaris datapipe in yaris_full.py.
     assert config.datapipe._target_.startswith(("datapipe.", "yaris_full."))
     if "yaris" in config:

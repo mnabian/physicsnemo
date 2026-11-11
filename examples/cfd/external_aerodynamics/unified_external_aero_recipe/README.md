@@ -527,6 +527,16 @@ training:
     gamma: 0.1
 ```
 
+Muon/AdamW remains the default optimizer. Set `+training.optimizer._target_`
+for another optimizer (including `timm.optim.Lion`), removing incompatible
+inherited arguments with Hydra's `~` overrides. For Lion, explicitly set
+`training.optimizer.lr=5e-5`, `+training.optimizer.betas=[0.9,0.99]`, and
+`+training.optimizer.weight_decay=0.05`. Use `+training.optimizer.foreach=true`
+when compiling Lion to preserve scheduled updates on CPU and CUDA. Optional
+`+training.grad_clip_norm=1.0` and `+training.ema_decay=0.9999` enable gradient
+clipping and EMA. Checkpoints retain optimizer, scheduler, and EMA state for
+resume; use `checkpoint_path=runs/<run_id>/checkpoints/ema` for EMA inference.
+
 ### How the pieces compose
 
 ```mermaid
@@ -862,7 +872,7 @@ TensorBoard / JSONL files; no external tracker required.
 | `src/metrics.py` | `MetricCalculator` — TensorDict-based metrics (relative L1, relative L2, MAE) with optional distributed all-reduce; reports per-field and per-component (x/y/z) metrics for vector fields. `resolve_metrics(cfg)` reads the recipe-side `cfg.metrics`. |
 | `src/output_normalize.py` | `normalize_output_to_tensordict` (Mesh -> `point_data.select`, tensor -> per-target slicing via `split_concat_by_target`) and `require_output_type(cfg)`. Tensorboard-free so the unit tests can import it directly. |
 | `src/forces.py` | Integrated aerodynamic force/moment coefficients from surface predictions. `force_moment_coefficients` integrates the traction `-Cp*n + Cf` over the vehicle via `Mesh.integrate`, projected onto drag/lift/side + roll/pitch/yaw axes; `ForceContext` / `ForceAccumulator` wrap the per-run config + accumulation. |
-| `src/utils.py` | Shared helpers: `build_muon_optimizer` (Muon+AdamW via `CombinedOptimizer`), `field_dim`, `align_scalar_shapes`, `validate_field_coverage`, `set_seed`, plus the cross-cutting runtime helpers `get_autocast_context` (+ `Precision`), `recursive_to_device`, `resolve_dict`, and `make_jsonl_logger`. |
+| `src/utils.py` | Shared helpers: `build_muon_optimizer` (Muon+AdamW via `CombinedOptimizer`), `build_optimizer` (optional Hydra optimizer), `optimizer_update` (AMP, clipping, and EMA coordination), `field_dim`, `align_scalar_shapes`, `validate_field_coverage`, `set_seed`, plus the cross-cutting runtime helpers `get_autocast_context` (+ `Precision`), `recursive_to_device`, `resolve_dict`, and `make_jsonl_logger`. |
 | `src/train.py` | Training loop with DDP, mixed precision, checkpointing, TensorBoard + JSONL logging, I/O benchmarking (`benchmark_io=true`), and profiling. (Dataloader assembly now lives in `datasets.build_dataloaders`.) |
 | `src/infer.py` | Inference companion: loads a checkpoint, runs a split, writes physical-unit predictions back as native `.pdmsh` `DomainMesh`es, reports training-space metrics, and (surface cases) integrated CD/CL/CM force coefficients. Imports nothing from `train.py`. |
 

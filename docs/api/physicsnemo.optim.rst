@@ -21,3 +21,16 @@ for decoder layers.
     :show-inheritance:
     :special-members: __init__
 
+WarmupCosine
+------------
+
+.. autoclass:: physicsnemo.optim.lr_scheduler.WarmupCosine
+    :members:
+    :show-inheritance:
+
+ModelEMA
+--------
+
+.. autoclass:: physicsnemo.optim.ModelEMA
+    :members:
+    :show-inheritance:

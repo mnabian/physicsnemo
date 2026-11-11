@@ -671,14 +671,16 @@ volume targets are velocity, pressure, and eddy viscosity.
 
 `dataset_reader_overrides.point_sets.<name>.count` controls `geometry`,
 `supernodes`, `surface_anchors`, `volume_anchors`, `surface_queries`, and
-`interior` independently. Validation samples stay fixed while training varies
+`interior` independently. Single-branch queries use `interior`; joint surface
+queries use `surface_queries`. Validation samples stay fixed while training varies
 by epoch.
 
 Reuse the training run's model settings from `resolved_config.yaml` at inference.
 
 For anchor supervision, set `+model.train_on_anchors=true` and
 `+dataset_reader_overrides.point_sets.surface_queries.indices_from=surface_anchors`
-for the surface branch, and
+for the surface branch in joint mode (`interior.indices_from=surface_anchors`
+in surface-only mode), and
 `+dataset_reader_overrides.point_sets.interior.indices_from=volume_anchors`
 for the volume branch. Validation and inference still decode independent queries.
 

@@ -166,21 +166,22 @@ def _ab_upt_domain_mesh(mode: str) -> DomainMesh:
         "geometry": Mesh(points=geometry),
         "supernodes": Mesh(points=geometry[:5]),
     }
-    interior = Mesh(points=torch.empty(0, 3))
     if mode != "volume":
         boundaries["surface_anchors"] = Mesh(points=surface.interior.points[:7])
-        boundaries["surface_queries"] = Mesh(
-            points=surface.interior.points,
-            point_data={"surface": surface.interior.point_data},
-        )
+        if mode == "surface":
+            interior = surface.interior
+        else:
+            boundaries["surface_queries"] = Mesh(
+                points=surface.interior.points,
+                point_data={"surface": surface.interior.point_data},
+            )
     if mode != "surface":
         volume = make_volume_domain_mesh(n_pts=13).interior
         boundaries["volume_anchors"] = Mesh(points=volume.points[:9])
+        fields = volume.point_data.select("velocity", "pressure", "nut")
         interior = Mesh(
             points=volume.points,
-            point_data={
-                "volume": volume.point_data.select("velocity", "pressure", "nut")
-            },
+            point_data={"volume": fields} if mode == "joint" else fields,
         )
     return DomainMesh(
         interior=interior, boundaries=boundaries, global_data=surface.global_data

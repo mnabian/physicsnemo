@@ -133,20 +133,18 @@ def optimizer_update(
         raise ValueError("grad_clip_norm must be finite and positive")
     optimizer.zero_grad()
     if scaler is not None:
-        previous_scale = scaler.get_scale()
         scaler.scale(loss).backward()
         if grad_clip_norm is not None:
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(parameters, grad_clip_norm)
         scaler.step(optimizer)
+        previous_scale = scaler.get_scale()
         scaler.update()
         updated = scaler.get_scale() >= previous_scale
     else:
         loss.backward()
         if grad_clip_norm is not None:
-            torch.nn.utils.clip_grad_norm_(
-                parameters, grad_clip_norm, error_if_nonfinite=True
-            )
+            torch.nn.utils.clip_grad_norm_(parameters, grad_clip_norm)
         optimizer.step()
         updated = True
     if updated and ema is not None:

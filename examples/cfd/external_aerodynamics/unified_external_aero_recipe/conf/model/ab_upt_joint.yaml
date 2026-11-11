@@ -52,7 +52,7 @@ model:
   num_interaction_blocks: 2
   num_shared_layers: 1
   num_decoder_layers: 6
-  pooling_radius: 0.25
+  pooling_radius: 0.03125
   pooling_chunk_size: 4096
   pooling_message_fp32: false
   query_chunk_size: 4096

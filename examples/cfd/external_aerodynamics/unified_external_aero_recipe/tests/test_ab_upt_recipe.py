@@ -73,7 +73,11 @@ def make_reader(root, mode="joint", **counts):
     cfg.sampling_resolution = 13
     specs = OmegaConf.to_container(cfg.pipeline.reader.point_sets, resolve=True)
     for name, spec in specs.items():
-        spec["count"] = counts[COUNT_KEYS[name]]
+        spec["count"] = counts[
+            "surface_queries"
+            if name == "interior" and mode == "surface"
+            else COUNT_KEYS[name]
+        ]
     return DomainMeshReader(root, pattern="run_*/domain_*.pdmsh", point_sets=specs)
 
 
@@ -81,7 +85,10 @@ def anchor_queries(specs, enabled):
     """Select shared training indices or independent validation queries."""
     for name, anchors in (
         ("surface_queries", "surface_anchors"),
-        ("interior", "volume_anchors"),
+        (
+            "interior",
+            "volume_anchors" if "volume_anchors" in specs else "surface_anchors",
+        ),
     ):
         if name in specs:
             if OmegaConf.is_config(specs):
@@ -142,7 +149,11 @@ def pipeline(root, mode):
     ds.train_datadir = str(root)
     ds.sampling_resolution = 13
     for name, spec in cfg.dataset_reader_overrides.point_sets.items():
-        spec.count = COUNTS[COUNT_KEYS[name]]
+        spec.count = COUNTS[
+            "surface_queries"
+            if name == "interior" and mode == "surface"
+            else COUNT_KEYS[name]
+        ]
     ds = _apply_dataset_reader_overrides(ds, cfg)
     dataset = build_dataset(ds, device="cpu", num_workers=1)
     dataset.reader.set_generator(torch.Generator().manual_seed(123))
@@ -168,12 +179,15 @@ def test_native_pipeline_normalization_and_export(native_case, mode, tmp_path):
     assert ("surface_anchors" in domain.boundary_names) == (mode != "volume")
     assert ("volume_anchors" in domain.boundary_names) == (mode != "surface")
     if mode == "surface":
-        assert domain.interior.n_points == 0
+        assert domain.interior.n_points == COUNTS["surface_queries"]
         assert "volume_anchors" not in cfg.forward_kwargs
     if mode == "volume":
         assert "surface_anchors" not in cfg.forward_kwargs
     targets = OmegaConf.to_container(ds.targets)
-    sources = OmegaConf.to_container(ds.target_sources)
+    sources = (
+        OmegaConf.to_container(ds.target_sources) if "target_sources" in ds else None
+    )
+    paths = sources or {name: f"interior.point_data.{name}" for name in targets}
     collate = build_collate_fn(
         "tensors", OmegaConf.to_container(cfg.forward_kwargs), targets, sources
     )
@@ -195,7 +209,7 @@ def test_native_pipeline_normalization_and_export(native_case, mode, tmp_path):
     )
     # Check inversion against the selected original values, independent of transforms.
     raw, _ = dataset.reader[0]
-    for name, source in sources.items():
+    for name, source in paths.items():
         torch.testing.assert_close(
             physical[as_nested_key(name)], walk_path(raw, source), rtol=1e-5, atol=2e-5
         )
@@ -210,10 +224,10 @@ def test_native_pipeline_normalization_and_export(native_case, mode, tmp_path):
         target_sources=sources,
     )
     saved = DomainMesh.load(str(output))
-    for name, source in sources.items():
+    for name, source in paths.items():
         mesh_path, leaf = source.split(".point_data.")
         data = walk_path(saved, mesh_path).point_data
-        parts = list(as_nested_key(leaf))
+        parts = leaf.split(".")
         parts[-1] = "pred_" + parts[-1]
         torch.testing.assert_close(data[tuple(parts)], physical[as_nested_key(name)])
         assert as_nested_key(leaf) not in data
@@ -339,7 +353,11 @@ def test_reader_keeps_labels_aligned_with_original_coordinates(native_case, mode
     reader = make_reader(root, mode=mode, **COUNTS)
     reader.set_generator(torch.Generator().manual_seed(654))
     sampled, _ = reader[0]
-    surface = sampled.boundaries.get("surface_queries")
+    surface = (
+        sampled.interior
+        if mode == "surface"
+        else sampled.boundaries.get("surface_queries")
+    )
     if mode != "volume":
         torch.testing.assert_close(
             surface.points, sampled.boundaries["vehicle"].cell_centroids
@@ -359,7 +377,7 @@ def test_reader_keeps_labels_aligned_with_original_coordinates(native_case, mode
         ),
         (
             mode != "surface",
-            sampled.interior,
+            sampled.interior if mode != "surface" else None,
             original.interior.points,
             original.interior.point_data,
             (
@@ -378,7 +396,9 @@ def test_reader_keeps_labels_aligned_with_original_coordinates(native_case, mode
         assert nearest.unique().numel() == query_mesh.n_points
         for target, source in fields:
             torch.testing.assert_close(
-                query_mesh.point_data[as_nested_key(target)],
+                query_mesh.point_data[
+                    as_nested_key(target if mode == "joint" else target.split(".")[-1])
+                ],
                 source_data[source][nearest],
             )
 
@@ -394,7 +414,9 @@ def test_anchor_supervision_keeps_labels_aligned(native_case, mode):
         (
             "surface",
             mode != "volume",
-            raw.boundaries.get("surface_queries"),
+            raw.interior
+            if mode == "surface"
+            else raw.boundaries.get("surface_queries"),
             original.boundaries["vehicle"],
         ),
         ("volume", mode != "surface", raw.interior, original.interior),
@@ -413,6 +435,9 @@ def test_anchor_supervision_keeps_labels_aligned(native_case, mode):
         nearest = torch.cdist(query_mesh.points, source_points).argmin(dim=1)
         torch.testing.assert_close(query_mesh.points, source_points[nearest])
         torch.testing.assert_close(
-            query_mesh.point_data[field, "pressure"], source_data["pMeanTrim"][nearest]
+            query_mesh.point_data[
+                (field, "pressure") if mode == "joint" else "pressure"
+            ],
+            source_data["pMeanTrim"][nearest],
         )
     dataset.close()
